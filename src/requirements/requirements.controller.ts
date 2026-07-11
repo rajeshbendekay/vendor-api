@@ -1,0 +1,59 @@
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  Param,
+  ParseIntPipe,
+  Patch,
+  Post,
+} from '@nestjs/common';
+import { RequirementsService } from './requirements.service';
+import {
+  AssignItemDto,
+  CreateRequirementDto,
+  UpdateRequirementDto,
+} from './dto';
+
+@Controller('requirements')
+export class RequirementsController {
+  constructor(private readonly service: RequirementsService) {}
+
+  @Get()
+  findAll() {
+    return this.service.findAll();
+  }
+
+  @Get(':id')
+  findOne(@Param('id', ParseIntPipe) id: number) {
+    return this.service.findOne(id);
+  }
+
+  @Post()
+  create(@Body() dto: CreateRequirementDto) {
+    return this.service.create(dto);
+  }
+
+  @Patch(':id')
+  update(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateRequirementDto,
+  ) {
+    return this.service.update(id, dto);
+  }
+
+  @Delete(':id')
+  remove(@Param('id', ParseIntPipe) id: number) {
+    return this.service.remove(id);
+  }
+
+  // Assign a vendor / capture vendor cost + markup for a single work item.
+  @Patch(':id/items/:itemId/assign')
+  assignItem(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('itemId', ParseIntPipe) itemId: number,
+    @Body() dto: AssignItemDto,
+  ) {
+    return this.service.assignItem(id, itemId, dto);
+  }
+}
