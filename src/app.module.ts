@@ -9,12 +9,19 @@ import { RequirementItem } from './requirements/requirement-item.entity';
 import { Quotation } from './quotations/quotation.entity';
 import { QuotationItem } from './quotations/quotation-item.entity';
 import { Invoice } from './invoices/invoice.entity';
+import { Investor } from './investors/investor.entity';
+import { InvestorType } from './investor-types/investor-type.entity';
+import { Investment } from './investments/investment.entity';
+import { Withdrawal } from './investments/withdrawal.entity';
 
 import { VendorsModule } from './vendors/vendors.module';
 import { ClientsModule } from './clients/clients.module';
 import { RequirementsModule } from './requirements/requirements.module';
 import { QuotationsModule } from './quotations/quotations.module';
 import { InvoicesModule } from './invoices/invoices.module';
+import { InvestorsModule } from './investors/investors.module';
+import { InvestorTypesModule } from './investor-types/investor-types.module';
+import { InvestmentsModule } from './investments/investments.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AuthModule } from './auth/auth.module';
 
@@ -38,6 +45,10 @@ import { AuthModule } from './auth/auth.module';
           Quotation,
           QuotationItem,
           Invoice,
+          Investor,
+          InvestorType,
+          Investment,
+          Withdrawal,
         ],
         synchronize: true, // dev convenience: auto-create/update tables
       }),
@@ -47,6 +58,9 @@ import { AuthModule } from './auth/auth.module';
     RequirementsModule,
     QuotationsModule,
     InvoicesModule,
+    InvestorsModule,
+    InvestorTypesModule,
+    InvestmentsModule,
     DashboardModule,
     AuthModule,
   ],
