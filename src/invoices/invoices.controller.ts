@@ -10,8 +10,11 @@ import {
 } from '@nestjs/common';
 import { InvoicesService } from './invoices.service';
 import { CreateInvoiceDto, UpdateInvoiceDto } from './dto';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/user-role.enum';
 
 @Controller('invoices')
+@Roles(UserRole.ADMIN)
 export class InvoicesController {
   constructor(private readonly service: InvoicesService) {}
 

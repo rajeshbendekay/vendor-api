@@ -14,8 +14,11 @@ import {
   CreateRequirementDto,
   UpdateRequirementDto,
 } from './dto';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/user-role.enum';
 
 @Controller('requirements')
+@Roles(UserRole.ADMIN)
 export class RequirementsController {
   constructor(private readonly service: RequirementsService) {}
 

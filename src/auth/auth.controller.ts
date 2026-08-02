@@ -1,16 +1,17 @@
 import { Body, Controller, Post } from '@nestjs/common';
-import { ConfigService } from '@nestjs/config';
+import { AuthService } from './auth.service';
+import { LoginDto } from './dto';
+import { Public } from './decorators/public.decorator';
 
-// Lightweight single shared-password gate. Not per-user auth — it simply checks
-// the submitted password against APP_PASSWORD so the secret never ships in the
-// frontend bundle. Suitable for an internal tool on a trusted network.
+// Real per-user login: phone or email + password, for both admin and
+// investor accounts (see User entity / UsersService).
 @Controller('auth')
 export class AuthController {
-  constructor(private readonly config: ConfigService) {}
+  constructor(private readonly authService: AuthService) {}
 
+  @Public()
   @Post('login')
-  login(@Body('password') password: string) {
-    const expected = this.config.get<string>('APP_PASSWORD', 'flexsignage');
-    return { ok: typeof password === 'string' && password === expected };
+  login(@Body() dto: LoginDto) {
+    return this.authService.login(dto.identifier, dto.password);
   }
 }

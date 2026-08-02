@@ -13,6 +13,8 @@ import { Investor } from './investors/investor.entity';
 import { InvestorType } from './investor-types/investor-type.entity';
 import { Investment } from './investments/investment.entity';
 import { Withdrawal } from './investments/withdrawal.entity';
+import { User } from './users/user.entity';
+import { MenuPermission } from './menu-permissions/menu-permission.entity';
 
 import { VendorsModule } from './vendors/vendors.module';
 import { ClientsModule } from './clients/clients.module';
@@ -24,6 +26,9 @@ import { InvestorTypesModule } from './investor-types/investor-types.module';
 import { InvestmentsModule } from './investments/investments.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AuthModule } from './auth/auth.module';
+import { UsersModule } from './users/users.module';
+import { MenuPermissionsModule } from './menu-permissions/menu-permissions.module';
+import { ProfileModule } from './profile/profile.module';
 
 @Module({
   imports: [
@@ -49,6 +54,8 @@ import { AuthModule } from './auth/auth.module';
           InvestorType,
           Investment,
           Withdrawal,
+          User,
+          MenuPermission,
         ],
         synchronize: true, // dev convenience: auto-create/update tables
       }),
@@ -63,6 +70,9 @@ import { AuthModule } from './auth/auth.module';
     InvestmentsModule,
     DashboardModule,
     AuthModule,
+    UsersModule,
+    MenuPermissionsModule,
+    ProfileModule,
   ],
 })
 export class AppModule {}

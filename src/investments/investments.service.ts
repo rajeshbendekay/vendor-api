@@ -1,4 +1,9 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import {
+  BadRequestException,
+  ForbiddenException,
+  Injectable,
+  NotFoundException,
+} from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Investment, InvestmentStatus } from './investment.entity';
@@ -55,8 +60,19 @@ export class InvestmentsService {
     return investment;
   }
 
-  async findOneWithComputed(id: number) {
-    return this.withComputed(await this.findOne(id));
+  // ownerInvestorId is set for INVESTOR-role callers — any investment not
+  // belonging to them is a 403, not just a 404, since these are internal
+  // IDs and this is honest about "you can't see this" vs "doesn't exist".
+  private assertOwnership(investment: Investment, ownerInvestorId: number | null) {
+    if (ownerInvestorId !== null && investment.investorId !== ownerInvestorId) {
+      throw new ForbiddenException('You do not have access to this investment');
+    }
+  }
+
+  async findOneWithComputed(id: number, ownerInvestorId: number | null = null) {
+    const investment = await this.findOne(id);
+    this.assertOwnership(investment, ownerInvestorId);
+    return this.withComputed(investment);
   }
 
   // endDate is always derived from startDate + the investor type's
@@ -141,8 +157,9 @@ export class InvestmentsService {
     return this.findOneWithComputed(investmentId);
   }
 
-  async findWithdrawals(investmentId: number) {
-    await this.findOne(investmentId);
+  async findWithdrawals(investmentId: number, ownerInvestorId: number | null = null) {
+    const investment = await this.findOne(investmentId);
+    this.assertOwnership(investment, ownerInvestorId);
     return this.withdrawalsRepo.find({
       where: { investmentId },
       order: { date: 'DESC', createdAt: 'DESC' },

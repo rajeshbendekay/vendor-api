@@ -6,8 +6,11 @@ import { Client } from '../clients/client.entity';
 import { Requirement } from '../requirements/requirement.entity';
 import { Invoice } from '../invoices/invoice.entity';
 import { RequirementStatus } from '../common/enums';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/user-role.enum';
 
 @Controller('dashboard')
+@Roles(UserRole.ADMIN)
 export class DashboardController {
   constructor(
     @InjectRepository(Vendor) private vendors: Repository<Vendor>,

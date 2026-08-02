@@ -10,8 +10,11 @@ import {
 } from '@nestjs/common';
 import { InvestorTypesService } from './investor-types.service';
 import { CreateInvestorTypeDto, UpdateInvestorTypeDto } from './dto';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/user-role.enum';
 
 @Controller('investor-types')
+@Roles(UserRole.ADMIN)
 export class InvestorTypesController {
   constructor(private readonly service: InvestorTypesService) {}
 

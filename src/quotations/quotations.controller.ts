@@ -9,8 +9,11 @@ import {
 } from '@nestjs/common';
 import { QuotationsService } from './quotations.service';
 import { GenerateQuotationDto, RequestRevisionDto } from './dto';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { UserRole } from '../users/user-role.enum';
 
 @Controller('quotations')
+@Roles(UserRole.ADMIN)
 export class QuotationsController {
   constructor(private readonly service: QuotationsService) {}
 
