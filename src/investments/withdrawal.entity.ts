@@ -8,9 +8,17 @@ import {
 } from 'typeorm';
 import { Investment } from './investment.entity';
 
-// A single partial (or final) payout taken against an investment's
-// final amount. The running total of these is what drives an
-// investment's withdrawnAmount / status.
+export enum WithdrawalType {
+  WITHDRAWAL = 'WITHDRAWAL',
+  CREDIT = 'CREDIT',
+  PROFIT_SETTLEMENT = 'PROFIT_SETTLEMENT',
+}
+
+// A single credit (principal top-up), withdrawal (principal reduction),
+// or profit settlement (PFS — closes out an installment's profit and
+// rolls its principal into the next one) applied to an investment row.
+// installment records which tranche the transaction was attributed to
+// at the time it was made.
 @Entity('investment_withdrawals')
 export class Withdrawal {
   @PrimaryGeneratedColumn()
@@ -22,6 +30,12 @@ export class Withdrawal {
   @ManyToOne(() => Investment)
   @JoinColumn({ name: 'investmentId' })
   investment: Investment;
+
+  @Column({ type: 'enum', enum: WithdrawalType, default: WithdrawalType.WITHDRAWAL })
+  type: WithdrawalType;
+
+  @Column({ type: 'int' })
+  installment: number;
 
   @Column({ type: 'decimal', precision: 12, scale: 2 })
   amount: number;

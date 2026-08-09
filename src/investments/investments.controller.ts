@@ -10,7 +10,12 @@ import {
   Query,
 } from '@nestjs/common';
 import { InvestmentsService } from './investments.service';
-import { CreateInvestmentDto, CreateWithdrawalDto, UpdateInvestmentDto } from './dto';
+import {
+  CreateInvestmentDto,
+  CreateWithdrawalDto,
+  UpdateInvestmentDto,
+  UpdateWithdrawalDto,
+} from './dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import type { AuthUser } from '../auth/guards/jwt-auth.guard';
@@ -64,18 +69,25 @@ export class InvestmentsController {
     return this.service.withdraw(id, dto);
   }
 
+  @Post(':id/settle-profit')
+  @Roles(UserRole.ADMIN)
+  settleProfit(@Param('id', ParseIntPipe) id: number) {
+    return this.service.settleProfit(id);
+  }
+
   @Get(':id/withdrawals')
   findWithdrawals(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
     return this.service.findWithdrawals(id, this.scopeFor(user));
   }
 
-  @Delete(':id/withdrawals/:withdrawalId')
+  @Patch(':id/withdrawals/:withdrawalId')
   @Roles(UserRole.ADMIN)
-  removeWithdrawal(
+  updateWithdrawal(
     @Param('id', ParseIntPipe) id: number,
     @Param('withdrawalId', ParseIntPipe) withdrawalId: number,
+    @Body() dto: UpdateWithdrawalDto,
   ) {
-    return this.service.removeWithdrawal(id, withdrawalId);
+    return this.service.updateWithdrawal(id, withdrawalId, dto);
   }
 
   private scopeFor(user: AuthUser): number | null {

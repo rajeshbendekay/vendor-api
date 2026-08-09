@@ -7,14 +7,16 @@ import {
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Investment, InvestmentStatus } from './investment.entity';
-import { Withdrawal } from './withdrawal.entity';
+import { Withdrawal, WithdrawalType } from './withdrawal.entity';
 import {
   CreateInvestmentDto,
   CreateWithdrawalDto,
   UpdateInvestmentDto,
+  UpdateWithdrawalDto,
 } from './dto';
 import { InvestorsService } from '../investors/investors.service';
 import { InvestorTypesService } from '../investor-types/investor-types.service';
+import { SettlementMode } from '../investor-types/investor-type.entity';
 
 function num(value: unknown): number {
   return Number(value) || 0;
@@ -31,14 +33,14 @@ export class InvestmentsService {
     private readonly investorTypesService: InvestorTypesService,
   ) {}
 
-  // finalAmount is principal + profit; remainingAmount is what's still
-  // owed after withdrawals. Both are computed, not stored.
+  // finalAmount is the live principal plus profit at the current rate;
+  // computed, not stored, since investmentAmount itself moves as
+  // credits/withdrawals land.
   private withComputed(investment: Investment) {
     const finalAmount =
       num(investment.investmentAmount) +
       (num(investment.investmentAmount) * num(investment.profitPercent)) / 100;
-    const remainingAmount = Math.max(0, finalAmount - num(investment.withdrawnAmount));
-    return { ...investment, finalAmount, remainingAmount };
+    return { ...investment, finalAmount };
   }
 
   async findAll() {
@@ -88,6 +90,58 @@ export class InvestmentsService {
     return end.toISOString().slice(0, 10);
   }
 
+  // Transaction IDs are "{first letter of the investor type name}-{seq}",
+  // e.g. R-001 for "Rotation". The sequence is scoped to that letter (not
+  // the type id) so the visible ID stays globally unique even if two
+  // types ever share an initial; it's derived from the highest number
+  // seen so far — including soft-deleted rows — so a delete never frees
+  // up its number for reuse.
+  private async prefixFor(investorTypeId?: number | null): Promise<string> {
+    if (!investorTypeId) return 'X';
+    const type = await this.investorTypesService.findOne(investorTypeId);
+    const letter = type.name.trim().charAt(0).toUpperCase();
+    return /^[A-Z]$/.test(letter) ? letter : 'X';
+  }
+
+  private async nextSequence(prefix: string): Promise<number> {
+    const rows: { transactionId: string }[] = await this.repo
+      .createQueryBuilder('investment')
+      .withDeleted()
+      .select('investment.transactionId', 'transactionId')
+      .where('investment.transactionId LIKE :pattern', { pattern: `${prefix}-%` })
+      .getRawMany();
+    let max = 0;
+    for (const row of rows) {
+      const n = parseInt(row.transactionId.slice(prefix.length + 1), 10);
+      if (!isNaN(n) && n > max) max = n;
+    }
+    return max + 1;
+  }
+
+  private async generateTransactionId(investorTypeId?: number | null): Promise<string> {
+    const prefix = await this.prefixFor(investorTypeId);
+    const seq = await this.nextSequence(prefix);
+    return `${prefix}-${String(seq).padStart(3, '0')}`;
+  }
+
+  // Assigns a freshly generated transaction ID to a brand-new chain
+  // (installment #1 only — PFS inherits instead, see settleProfit) and
+  // saves. Since transactionId isn't DB-unique any more (a chain shares
+  // one across all its installments), a duplicate can't be caught by a
+  // constraint — so this re-checks existence and retries on the rare
+  // race where two creates generate the same next number concurrently.
+  private async saveWithTransactionId<T extends Investment>(entity: T): Promise<T> {
+    for (let attempt = 0; attempt < 5; attempt++) {
+      const candidate = await this.generateTransactionId(entity.investorTypeId);
+      const taken = await this.repo.exists({ where: { transactionId: candidate }, withDeleted: true });
+      if (!taken) {
+        entity.transactionId = candidate;
+        return await this.repo.save(entity);
+      }
+    }
+    throw new Error('Could not generate a unique transaction ID');
+  }
+
   async create(dto: CreateInvestmentDto) {
     await this.investorsService.findOne(dto.investorId);
     const investment = this.repo.create(dto);
@@ -95,7 +149,7 @@ export class InvestmentsService {
       investment.startDate,
       investment.investorTypeId,
     );
-    const saved = await this.repo.save(investment);
+    const saved = await this.saveWithTransactionId(investment);
     return this.findOneWithComputed(saved.id);
   }
 
@@ -125,50 +179,152 @@ export class InvestmentsService {
     return { deleted: true, id };
   }
 
+  // A Credit tops up this row's principal in place; a Withdrawal draws
+  // it down. Both always apply to the current installment — spinning
+  // off a new installment is PFS's job alone (see settleProfit below).
+  // Neither is allowed once settled: a settled installment is closed
+  // for good — its balance moves forward only via a new installment.
   async withdraw(investmentId: number, dto: CreateWithdrawalDto) {
+    const investment = await this.findOne(investmentId);
+    const type = dto.type ?? WithdrawalType.WITHDRAWAL;
+    const date = dto.date || new Date().toISOString().slice(0, 10);
+
+    if (investment.status === InvestmentStatus.SETTLED) {
+      throw new BadRequestException('This investment is already settled');
+    }
+
+    if (type === WithdrawalType.WITHDRAWAL) {
+      const principal = num(investment.investmentAmount);
+      if (dto.amount > principal + 0.01) {
+        throw new BadRequestException(
+          `Withdrawal amount exceeds current investment of ${principal.toFixed(2)}`,
+        );
+      }
+      investment.investmentAmount = Math.max(0, principal - dto.amount);
+      investment.status =
+        investment.investmentAmount <= 0.01 ? InvestmentStatus.SETTLED : InvestmentStatus.ACTIVE;
+    } else {
+      investment.investmentAmount = num(investment.investmentAmount) + dto.amount;
+      investment.status = InvestmentStatus.ACTIVE;
+    }
+    await this.repo.save(investment);
+
+    await this.withdrawalsRepo.save(
+      this.withdrawalsRepo.create({
+        investmentId: investment.id,
+        type,
+        installment: investment.installment,
+        amount: dto.amount,
+        date,
+        notes: dto.notes,
+      }),
+    );
+    return this.findOneWithComputed(investment.id);
+  }
+
+  // PFS (Profit Settlement) behaves differently per investor type:
+  // ROLLOVER (e.g. Rotation) settles only the profit and carries the
+  // principal — unchanged — into a new installment starting on this
+  // one's endDate and running a fixed 45 days, regardless of the
+  // investor type's normal term length. FULL_SETTLEMENT (e.g. Short
+  // Term) settles principal and profit together in one transaction and
+  // closes the investment for good — no next installment.
+  async settleProfit(investmentId: number) {
     const investment = await this.findOne(investmentId);
     if (investment.status === InvestmentStatus.SETTLED) {
       throw new BadRequestException('This investment is already settled');
     }
-    const finalAmount =
-      num(investment.investmentAmount) +
-      (num(investment.investmentAmount) * num(investment.profitPercent)) / 100;
-    const remainingAmount = finalAmount - num(investment.withdrawnAmount);
-    if (dto.amount > remainingAmount + 0.01) {
+    if (!investment.endDate) {
       throw new BadRequestException(
-        `Withdrawal amount exceeds remaining balance of ${remainingAmount.toFixed(2)}`,
+        'This investment has no end date to roll the next installment forward from',
       );
     }
 
-    const withdrawal = this.withdrawalsRepo.create({
-      investmentId,
-      amount: dto.amount,
-      date: dto.date || new Date().toISOString().slice(0, 10),
-      notes: dto.notes,
-    });
-    await this.withdrawalsRepo.save(withdrawal);
+    const principal = num(investment.investmentAmount);
+    const profitAmount = (principal * num(investment.profitPercent)) / 100;
+    const fullSettlement = investment.investorType?.settlementMode === SettlementMode.FULL_SETTLEMENT;
 
-    investment.withdrawnAmount = num(investment.withdrawnAmount) + dto.amount;
-    if (investment.withdrawnAmount >= finalAmount - 0.01) {
-      investment.status = InvestmentStatus.SETTLED;
-    }
+    investment.status = InvestmentStatus.SETTLED;
     await this.repo.save(investment);
 
-    return this.findOneWithComputed(investmentId);
+    await this.withdrawalsRepo.save(
+      this.withdrawalsRepo.create({
+        investmentId: investment.id,
+        type: WithdrawalType.PROFIT_SETTLEMENT,
+        installment: investment.installment,
+        amount: fullSettlement ? principal + profitAmount : profitAmount,
+        date: investment.endDate,
+        notes: fullSettlement
+          ? 'Principal and profit fully settled; investment closed'
+          : 'Profit settled; principal carried forward to next installment',
+      }),
+    );
+
+    if (fullSettlement) {
+      return this.findOneWithComputed(investment.id);
+    }
+
+    const startDate = investment.endDate;
+    const endDate = new Date(startDate);
+    endDate.setDate(endDate.getDate() + 45);
+
+    const nextInstallment = this.repo.create({
+      investorId: investment.investorId,
+      investorTypeId: investment.investorTypeId,
+      investmentAmount: principal,
+      profitPercent: investment.profitPercent,
+      installment: investment.installment + 1,
+      rootInvestmentId: investment.rootInvestmentId ?? investment.id,
+      // Inherit — a PFS installment is still the same investment, not a
+      // new one, so it keeps the chain's transaction ID.
+      transactionId: investment.transactionId,
+      startDate,
+      endDate: endDate.toISOString().slice(0, 10),
+      notes: investment.notes,
+    });
+    const saved = await this.repo.save(nextInstallment);
+    return this.findOneWithComputed(saved.id);
   }
 
+  // principal per entry is a running balance, not a stored snapshot: we
+  // derive the opening balance by unwinding every CREDIT/WITHDRAWAL delta
+  // from the row's current (authoritative) investmentAmount, then walk
+  // forward chronologically re-applying each delta. This stays correct
+  // even after a past transaction's amount is edited, since it's always
+  // recomputed from current state rather than trusted from a stored value.
   async findWithdrawals(investmentId: number, ownerInvestorId: number | null = null) {
     const investment = await this.findOne(investmentId);
     this.assertOwnership(investment, ownerInvestorId);
-    return this.withdrawalsRepo.find({
+    const chronological = await this.withdrawalsRepo.find({
       where: { investmentId },
-      order: { date: 'DESC', createdAt: 'DESC' },
+      order: { date: 'ASC', createdAt: 'ASC' },
     });
+
+    const netDelta = chronological.reduce((sum, w) => {
+      if (w.type === WithdrawalType.CREDIT) return sum + num(w.amount);
+      if (w.type === WithdrawalType.WITHDRAWAL) return sum - num(w.amount);
+      return sum;
+    }, 0);
+    const openingPrincipal = num(investment.investmentAmount) - netDelta;
+
+    let running = openingPrincipal;
+    const transactions = chronological.map((w) => {
+      if (w.type === WithdrawalType.CREDIT) running += num(w.amount);
+      else if (w.type === WithdrawalType.WITHDRAWAL) running -= num(w.amount);
+      return { ...w, principal: running };
+    });
+
+    return { openingPrincipal, transactions };
   }
 
-  // Reverses a withdrawal: gives the amount back to the investment's
-  // balance and re-opens it (ACTIVE) if it had been auto-settled.
-  async removeWithdrawal(investmentId: number, withdrawalId: number) {
+  // Corrects a credit or withdrawal entry's amount/date/notes in place.
+  // Changing the amount reverses the old amount's effect on principal
+  // and reapplies the new one, rather than touching type or installment.
+  async updateWithdrawal(
+    investmentId: number,
+    withdrawalId: number,
+    dto: UpdateWithdrawalDto,
+  ) {
     const investment = await this.findOne(investmentId);
     const withdrawal = await this.withdrawalsRepo.findOne({
       where: { id: withdrawalId, investmentId },
@@ -178,15 +334,37 @@ export class InvestmentsService {
         `Withdrawal ${withdrawalId} not found for investment ${investmentId}`,
       );
     }
+    if (withdrawal.type === WithdrawalType.PROFIT_SETTLEMENT) {
+      throw new BadRequestException('Profit settlements cannot be edited');
+    }
 
-    await this.withdrawalsRepo.remove(withdrawal);
+    if (dto.amount != null && dto.amount !== num(withdrawal.amount)) {
+      const principalBeforeThis =
+        num(investment.investmentAmount) +
+        num(withdrawal.amount) * (withdrawal.type === WithdrawalType.CREDIT ? -1 : 1);
 
-    investment.withdrawnAmount = Math.max(
-      0,
-      num(investment.withdrawnAmount) - num(withdrawal.amount),
-    );
-    investment.status = InvestmentStatus.ACTIVE;
-    await this.repo.save(investment);
+      let principal: number;
+      if (withdrawal.type === WithdrawalType.WITHDRAWAL) {
+        if (dto.amount > principalBeforeThis + 0.01) {
+          throw new BadRequestException(
+            `Withdrawal amount exceeds current investment of ${principalBeforeThis.toFixed(2)}`,
+          );
+        }
+        principal = Math.max(0, principalBeforeThis - dto.amount);
+      } else {
+        principal = principalBeforeThis + dto.amount;
+      }
+
+      investment.investmentAmount = principal;
+      investment.status =
+        principal <= 0.01 ? InvestmentStatus.SETTLED : InvestmentStatus.ACTIVE;
+      await this.repo.save(investment);
+      withdrawal.amount = dto.amount;
+    }
+
+    if (dto.date) withdrawal.date = dto.date;
+    if (dto.notes !== undefined) withdrawal.notes = dto.notes;
+    await this.withdrawalsRepo.save(withdrawal);
 
     return this.findOneWithComputed(investmentId);
   }

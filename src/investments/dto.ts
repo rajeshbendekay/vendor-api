@@ -1,5 +1,6 @@
 import {
   IsDateString,
+  IsEnum,
   IsInt,
   IsNumber,
   IsOptional,
@@ -8,6 +9,7 @@ import {
   Min,
 } from 'class-validator';
 import { PartialType } from '@nestjs/mapped-types';
+import { WithdrawalType } from './withdrawal.entity';
 
 export class CreateInvestmentDto {
   @IsInt()
@@ -36,9 +38,22 @@ export class CreateInvestmentDto {
 export class UpdateInvestmentDto extends PartialType(CreateInvestmentDto) {}
 
 export class CreateWithdrawalDto {
+  @IsOptional() @IsEnum(WithdrawalType) type?: WithdrawalType;
+
   @IsNumber()
   @Min(0.01)
   amount: number;
+
+  @IsOptional() @IsDateString() date?: string;
+
+  @IsOptional() @IsString() notes?: string;
+}
+
+// type is intentionally not editable — recasting a Credit as a
+// Withdrawal (or vice versa) after the fact is a different action, not
+// a correction; delete and re-record it instead.
+export class UpdateWithdrawalDto {
+  @IsOptional() @IsNumber() @Min(0.01) amount?: number;
 
   @IsOptional() @IsDateString() date?: string;
 
