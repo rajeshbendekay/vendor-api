@@ -25,6 +25,7 @@ export class AuthService {
       sub: user.id,
       role: user.role,
       investorId: user.investorId,
+      returnPartyId: user.returnPartyId,
     });
 
     return {
@@ -34,6 +35,7 @@ export class AuthService {
         name: user.name,
         role: user.role,
         investorId: user.investorId,
+        returnPartyId: user.returnPartyId,
       },
     };
   }

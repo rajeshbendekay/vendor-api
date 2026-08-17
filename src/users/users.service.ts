@@ -29,14 +29,17 @@ export class UsersService {
 
   async findAll() {
     const users = await this.repo.find({
-      relations: { investor: true },
+      relations: { investor: true, returnParty: true },
       order: { createdAt: 'DESC' },
     });
     return users.map(omitPassword);
   }
 
   async findOne(id: number) {
-    const user = await this.repo.findOne({ where: { id }, relations: { investor: true } });
+    const user = await this.repo.findOne({
+      where: { id },
+      relations: { investor: true, returnParty: true },
+    });
     if (!user) throw new NotFoundException(`User ${id} not found`);
     return omitPassword(user);
   }
@@ -73,6 +76,7 @@ export class UsersService {
       passwordHash: await this.hash(dto.password),
       role: UserRole.ADMIN,
       investorId: null,
+      returnPartyId: null,
     });
     try {
       const saved = await this.repo.save(user);
@@ -85,8 +89,9 @@ export class UsersService {
     }
   }
 
-  // Used by the admin bootstrap seed and by InvestorsService (within its own
-  // transaction) — can create either role, including a linked investorId.
+  // Used by the admin bootstrap seed and by InvestorsService/
+  // ReturnPartiesService (within their own transactions) — can create any
+  // role, including a linked investorId or returnPartyId.
   createRaw(data: {
     name?: string | null;
     phone?: string | null;
@@ -94,6 +99,7 @@ export class UsersService {
     password: string;
     role: UserRole;
     investorId?: number | null;
+    returnPartyId?: number | null;
   }) {
     return this.hash(data.password).then((passwordHash) => {
       const user = this.repo.create({
@@ -103,6 +109,7 @@ export class UsersService {
         passwordHash,
         role: data.role,
         investorId: data.investorId ?? null,
+        returnPartyId: data.returnPartyId ?? null,
       });
       return this.repo.save(user);
     });

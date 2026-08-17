@@ -13,8 +13,14 @@ import { Investor } from './investors/investor.entity';
 import { InvestorType } from './investor-types/investor-type.entity';
 import { Investment } from './investments/investment.entity';
 import { Withdrawal } from './investments/withdrawal.entity';
+import { ReturnParty } from './return-parties/return-party.entity';
+import { ReturnType } from './return-types/return-type.entity';
+import { Return } from './returns/return.entity';
+import { ReturnWithdrawal } from './returns/return-withdrawal.entity';
 import { User } from './users/user.entity';
 import { MenuPermission } from './menu-permissions/menu-permission.entity';
+import { LoanType } from './loan-types/loan-type.entity';
+import { Loan } from './loans/loan.entity';
 
 import { VendorsModule } from './vendors/vendors.module';
 import { ClientsModule } from './clients/clients.module';
@@ -24,6 +30,11 @@ import { InvoicesModule } from './invoices/invoices.module';
 import { InvestorsModule } from './investors/investors.module';
 import { InvestorTypesModule } from './investor-types/investor-types.module';
 import { InvestmentsModule } from './investments/investments.module';
+import { ReturnPartiesModule } from './return-parties/return-parties.module';
+import { ReturnTypesModule } from './return-types/return-types.module';
+import { ReturnsModule } from './returns/returns.module';
+import { LoanTypesModule } from './loan-types/loan-types.module';
+import { LoansModule } from './loans/loans.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -54,8 +65,14 @@ import { ProfileModule } from './profile/profile.module';
           InvestorType,
           Investment,
           Withdrawal,
+          ReturnParty,
+          ReturnType,
+          Return,
+          ReturnWithdrawal,
           User,
           MenuPermission,
+          LoanType,
+          Loan,
         ],
         synchronize: true, // dev convenience: auto-create/update tables
       }),
@@ -68,6 +85,11 @@ import { ProfileModule } from './profile/profile.module';
     InvestorsModule,
     InvestorTypesModule,
     InvestmentsModule,
+    ReturnPartiesModule,
+    ReturnTypesModule,
+    ReturnsModule,
+    LoanTypesModule,
+    LoansModule,
     DashboardModule,
     AuthModule,
     UsersModule,

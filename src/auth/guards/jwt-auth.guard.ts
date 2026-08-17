@@ -14,12 +14,14 @@ export interface AuthUser {
   id: number;
   role: string;
   investorId: number | null;
+  returnPartyId: number | null;
 }
 
 interface JwtPayload {
   sub: number;
   role: string;
   investorId: number | null;
+  returnPartyId: number | null;
 }
 
 // Registered globally as APP_GUARD (see auth.module.ts) — every route
@@ -61,6 +63,7 @@ export class JwtAuthGuard implements CanActivate {
       id: user.id,
       role: user.role,
       investorId: user.investorId,
+      returnPartyId: user.returnPartyId,
     };
     (request as Request & { user: AuthUser }).user = authUser;
     return true;

@@ -5,6 +5,7 @@ import * as bcrypt from 'bcryptjs';
 import { User } from '../users/user.entity';
 import { UserRole } from '../users/user-role.enum';
 import { Investor } from '../investors/investor.entity';
+import { ReturnParty } from '../return-parties/return-party.entity';
 import type { AuthUser } from '../auth/guards/jwt-auth.guard';
 import { UpdateProfileDto } from './dto';
 
@@ -49,9 +50,10 @@ export class ProfileService {
         if (dto.password) user.passwordHash = await bcrypt.hash(dto.password, 10);
         const savedUser = await userRepo.save(user);
 
-        // Investors also keep a KYC record with its own copy of name/phone/
-        // email — mirror the change there so the two don't drift apart
-        // (same dual-write pattern as InvestorsService.update).
+        // Investors/return parties also keep a KYC record with its own copy
+        // of name/phone/email — mirror the change there so the two don't
+        // drift apart (same dual-write pattern as
+        // InvestorsService.update/ReturnPartiesService.update).
         if (user.role === UserRole.INVESTOR && user.investorId) {
           const investorRepo = manager.getRepository(Investor);
           const investor = await investorRepo.findOne({ where: { id: user.investorId } });
@@ -60,6 +62,16 @@ export class ProfileService {
             if (dto.phone !== undefined) investor.phone = dto.phone;
             if (dto.email !== undefined) investor.email = dto.email;
             await investorRepo.save(investor);
+          }
+        }
+        if (user.role === UserRole.RETURN_PARTY && user.returnPartyId) {
+          const returnPartyRepo = manager.getRepository(ReturnParty);
+          const party = await returnPartyRepo.findOne({ where: { id: user.returnPartyId } });
+          if (party) {
+            if (dto.name !== undefined) party.name = dto.name;
+            if (dto.phone !== undefined) party.phone = dto.phone;
+            if (dto.email !== undefined) party.email = dto.email;
+            await returnPartyRepo.save(party);
           }
         }
 
