@@ -33,68 +33,51 @@ export class InvestmentsService {
     private readonly investorTypesService: InvestorTypesService,
   ) {}
 
-  // Reconstructs the principal as it stood on asOfDate: unwind every
-  // CREDIT/WITHDRAWAL delta from the row's current (authoritative)
-  // investmentAmount to get the opening balance, then replay only the
-  // deltas dated on/before asOfDate. Deltas expects ASC date order (same
-  // as findWithdrawals). Used to freeze profit at term-end — see
-  // profitAmount below.
-  private principalAsOf(investment: Investment, asOfDate: string, deltas: Withdrawal[]): number {
-    const netDelta = deltas.reduce((sum, w) => {
-      if (w.type === WithdrawalType.CREDIT) return sum + num(w.amount);
-      if (w.type === WithdrawalType.WITHDRAWAL) return sum - num(w.amount);
-      return sum;
-    }, 0);
-    let running = num(investment.investmentAmount) - netDelta;
-    for (const w of deltas) {
-      if (w.date > asOfDate) break;
-      if (w.type === WithdrawalType.CREDIT) running += num(w.amount);
-      else if (w.type === WithdrawalType.WITHDRAWAL) running -= num(w.amount);
-    }
-    return running;
+  private today(): string {
+    return new Date().toISOString().slice(0, 10);
   }
 
-  // profitAmount is normally the live principal's profit at the current
-  // rate. But once an investment's term has ended, its profit is
-  // finalized on the terms of that term — a withdrawal made afterward
-  // (against the now-matured payout) must not retroactively shrink
-  // profit already earned. So once endDate has passed, profit is based
-  // on the principal as it stood on endDate instead of on investmentAmount
-  // as it stands today. finalAmount is always live principal + that
-  // profit; neither is stored, since investmentAmount itself moves as
-  // credits/withdrawals land.
-  private withComputed(investment: Investment, deltas: Withdrawal[] = []) {
+  // profitAmount is computed off a basis that only grows (credits) and
+  // is never reduced by a Withdrawal: a Withdrawal draws down
+  // investmentAmount as the balance still owed to the investor, but the
+  // profit earned over the term must stay intact regardless of how much
+  // (or when) principal is drawn down — only PFS (settleProfit) actually
+  // finalizes/closes it out. Adding back every WITHDRAWAL amount ever
+  // taken from this row to the live principal reconstructs that basis
+  // (openingPrincipal + credits) without needing a stored snapshot.
+  // finalAmount is always live principal + that profit; neither is
+  // stored, since investmentAmount itself moves as credits/withdrawals
+  // land.
+  private withComputed(investment: Investment, withdrawnTotal = 0) {
     const principal = num(investment.investmentAmount);
-    const today = new Date().toISOString().slice(0, 10);
-    const termEnded =
-      investment.status !== InvestmentStatus.SETTLED &&
-      !!investment.endDate &&
-      investment.endDate <= today;
-    const profitBase = termEnded
-      ? this.principalAsOf(investment, investment.endDate as string, deltas)
-      : principal;
+    const profitBase = principal + withdrawnTotal;
     const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
     const finalAmount = principal + profitAmount;
     return { ...investment, finalAmount };
   }
 
-  // Batches the withdrawal ledger for a set of investments into one
+  private async withdrawnTotal(investmentId: number): Promise<number> {
+    const withdrawals = await this.withdrawalsRepo.find({
+      where: { investmentId, type: WithdrawalType.WITHDRAWAL },
+    });
+    return withdrawals.reduce((sum, w) => sum + num(w.amount), 0);
+  }
+
+  // Batches the withdrawal totals for a set of investments into one
   // query instead of one per row, so findAll()/findForInvestor() stay
   // O(1) round trips regardless of list size.
   private async withComputedMany(investments: Investment[]) {
     const ids = investments.map((i) => i.id);
-    const deltas = ids.length
+    const withdrawals = ids.length
       ? await this.withdrawalsRepo.find({
-          where: { investmentId: In(ids) },
-          order: { date: 'ASC', createdAt: 'ASC' },
+          where: { investmentId: In(ids), type: WithdrawalType.WITHDRAWAL },
         })
       : [];
-    const byInvestment = new Map<number, Withdrawal[]>();
-    for (const d of deltas) {
-      if (!byInvestment.has(d.investmentId)) byInvestment.set(d.investmentId, []);
-      byInvestment.get(d.investmentId)!.push(d);
+    const totals = new Map<number, number>();
+    for (const w of withdrawals) {
+      totals.set(w.investmentId, (totals.get(w.investmentId) ?? 0) + num(w.amount));
     }
-    return investments.map((i) => this.withComputed(i, byInvestment.get(i.id) ?? []));
+    return investments.map((i) => this.withComputed(i, totals.get(i.id) ?? 0));
   }
 
   async findAll() {
@@ -128,11 +111,7 @@ export class InvestmentsService {
   async findOneWithComputed(id: number, ownerInvestorId: number | null = null) {
     const investment = await this.findOne(id);
     this.assertOwnership(investment, ownerInvestorId);
-    const deltas = await this.withdrawalsRepo.find({
-      where: { investmentId: id },
-      order: { date: 'ASC', createdAt: 'ASC' },
-    });
-    return this.withComputed(investment, deltas);
+    return this.withComputed(investment, await this.withdrawnTotal(id));
   }
 
   // endDate is always derived from startDate + the investor type's
@@ -242,13 +221,28 @@ export class InvestmentsService {
   // off a new installment is PFS's job alone (see settleProfit below).
   // Neither is allowed once settled: a settled installment is closed
   // for good — its balance moves forward only via a new installment.
+  // For ROLLOVER (e.g. Rotation) investor types specifically, neither is
+  // allowed either once the installment's term has ended — the correct
+  // next step there is PFS (roll principal into a new installment), not
+  // an ad-hoc credit/withdrawal against a matured row. FULL_SETTLEMENT
+  // (e.g. Short Term) has no such restriction: a withdrawal there is a
+  // legitimate partial payout of the matured funds pending PFS closeout.
   async withdraw(investmentId: number, dto: CreateWithdrawalDto) {
     const investment = await this.findOne(investmentId);
     const type = dto.type ?? WithdrawalType.WITHDRAWAL;
-    const date = dto.date || new Date().toISOString().slice(0, 10);
+    const date = dto.date || this.today();
 
     if (investment.status === InvestmentStatus.SETTLED) {
       throw new BadRequestException('This investment is already settled');
+    }
+    if (
+      investment.investorType?.settlementMode === SettlementMode.ROLLOVER &&
+      investment.endDate &&
+      investment.endDate <= this.today()
+    ) {
+      throw new BadRequestException(
+        'This installment has passed its end date — settle profit (PFS) to roll it into a new installment before crediting or withdrawing',
+      );
     }
 
     if (type === WithdrawalType.WITHDRAWAL) {
@@ -258,12 +252,14 @@ export class InvestmentsService {
           `Withdrawal amount exceeds current investment of ${principal.toFixed(2)}`,
         );
       }
+      // A zero balance does NOT settle the investment — settlement is
+      // only ever triggered explicitly via PFS (see settleProfit below).
+      // Profit stays intact and available while ACTIVE even at ₹0
+      // principal, since withComputed's profit basis doesn't depend on
+      // the live balance.
       investment.investmentAmount = Math.max(0, principal - dto.amount);
-      investment.status =
-        investment.investmentAmount <= 0.01 ? InvestmentStatus.SETTLED : InvestmentStatus.ACTIVE;
     } else {
       investment.investmentAmount = num(investment.investmentAmount) + dto.amount;
-      investment.status = InvestmentStatus.ACTIVE;
     }
     await this.repo.save(investment);
 
@@ -299,17 +295,13 @@ export class InvestmentsService {
     }
 
     const principal = num(investment.investmentAmount);
-    // Profit is finalized on the principal as it stood at endDate, not
-    // on whatever investmentAmount happens to be right now — a
-    // withdrawal made after the term ended (but before this settlement
-    // is actually clicked) must not shrink the profit it earned over
-    // the full term. Applies the same way to FULL_SETTLEMENT (Short
-    // Term) and ROLLOVER (Rotation) investor types.
-    const deltas = await this.withdrawalsRepo.find({
-      where: { investmentId: investment.id },
-      order: { date: 'ASC', createdAt: 'ASC' },
-    });
-    const profitBase = this.principalAsOf(investment, investment.endDate, deltas);
+    // Profit is finalized on the same basis as the live display (see
+    // withComputed): principal plus everything ever withdrawn from this
+    // row, so a withdrawal made at any point during the term doesn't
+    // shrink the profit it earned. Applies the same way to
+    // FULL_SETTLEMENT (Short Term) and ROLLOVER (Rotation) investor
+    // types.
+    const profitBase = principal + (await this.withdrawnTotal(investment.id));
     const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
     const fullSettlement = investment.investorType?.settlementMode === SettlementMode.FULL_SETTLEMENT;
 
@@ -424,9 +416,9 @@ export class InvestmentsService {
         principal = principalBeforeThis + dto.amount;
       }
 
+      // A zero (or edited-down) balance does NOT settle the investment
+      // — settlement is only ever triggered explicitly via PFS.
       investment.investmentAmount = principal;
-      investment.status =
-        principal <= 0.01 ? InvestmentStatus.SETTLED : InvestmentStatus.ACTIVE;
       await this.repo.save(investment);
       withdrawal.amount = dto.amount;
     }

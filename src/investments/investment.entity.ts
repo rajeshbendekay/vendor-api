@@ -21,8 +21,9 @@ export type InvestmentStatus =
 // A single capital contribution by an investor. One investor can have
 // many investments (1:N) — each with its own type, amount, and term.
 // investmentAmount is the live principal: a Credit tops it up in place,
-// a Withdrawal draws it down; once it hits 0 the investment is marked
-// SETTLED and locked from further edits/deletes/withdrawals/PFS.
+// a Withdrawal draws it down — even down to 0, it stays ACTIVE. SETTLED
+// is only ever set explicitly via PFS (settleProfit), which then locks
+// the row from further edits/deletes/withdrawals/PFS.
 // installment counts which tranche this row represents within its
 // chain; rootInvestmentId links a PFS-spun-off installment back to
 // installment #1 of that same chain (null on installment #1 itself —
