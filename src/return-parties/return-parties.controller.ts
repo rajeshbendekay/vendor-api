@@ -22,7 +22,7 @@ export class ReturnPartiesController {
   // Both roles can call this — a RETURN_PARTY only ever gets their own record.
   @Get()
   findAll(@CurrentUser() user: AuthUser) {
-    if (user.role === UserRole.RETURN_PARTY) {
+    if (user.roles.includes(UserRole.RETURN_PARTY)) {
       return this.service.findAllForReturnParty(user.returnPartyId as number);
     }
     return this.service.findAll();
@@ -30,7 +30,7 @@ export class ReturnPartiesController {
 
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
-    if (user.role === UserRole.RETURN_PARTY) {
+    if (user.roles.includes(UserRole.RETURN_PARTY)) {
       return this.service.findOneForReturnParty(id, user.returnPartyId as number);
     }
     return this.service.findOne(id);

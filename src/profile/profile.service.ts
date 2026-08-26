@@ -54,7 +54,7 @@ export class ProfileService {
         // of name/phone/email — mirror the change there so the two don't
         // drift apart (same dual-write pattern as
         // InvestorsService.update/ReturnPartiesService.update).
-        if (user.role === UserRole.INVESTOR && user.investorId) {
+        if (user.roles.includes(UserRole.INVESTOR) && user.investorId) {
           const investorRepo = manager.getRepository(Investor);
           const investor = await investorRepo.findOne({ where: { id: user.investorId } });
           if (investor) {
@@ -64,7 +64,7 @@ export class ProfileService {
             await investorRepo.save(investor);
           }
         }
-        if (user.role === UserRole.RETURN_PARTY && user.returnPartyId) {
+        if (user.roles.includes(UserRole.RETURN_PARTY) && user.returnPartyId) {
           const returnPartyRepo = manager.getRepository(ReturnParty);
           const party = await returnPartyRepo.findOne({ where: { id: user.returnPartyId } });
           if (party) {

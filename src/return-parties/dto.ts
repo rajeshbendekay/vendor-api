@@ -16,11 +16,11 @@ export class CreateReturnPartyDto {
   @IsOptional() @IsString() accountNumber?: string;
   @IsOptional() @IsString() ifscCode?: string;
 
-  // Login password for this return party — required on create so they can
-  // sign in with their phone/email immediately (see
-  // return-parties.service.ts, which creates the linked User account in
-  // the same transaction).
-  @IsString() @MinLength(8) password: string;
+  // Login password for this return party. Required to create a brand-new
+  // login on create; omit it if this phone already has a login (e.g. the
+  // same person is already an investor) — the RETURN_PARTY role is added
+  // onto that existing login instead (see return-parties.service.ts).
+  @IsOptional() @IsString() @MinLength(8) password?: string;
 }
 
 // PartialType makes every field (including password) optional — on update,

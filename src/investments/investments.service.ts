@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Investment, InvestmentStatus } from './investment.entity';
 import { Withdrawal, WithdrawalType } from './withdrawal.entity';
 import {
@@ -33,19 +33,73 @@ export class InvestmentsService {
     private readonly investorTypesService: InvestorTypesService,
   ) {}
 
-  // finalAmount is the live principal plus profit at the current rate;
-  // computed, not stored, since investmentAmount itself moves as
+  // Reconstructs the principal as it stood on asOfDate: unwind every
+  // CREDIT/WITHDRAWAL delta from the row's current (authoritative)
+  // investmentAmount to get the opening balance, then replay only the
+  // deltas dated on/before asOfDate. Deltas expects ASC date order (same
+  // as findWithdrawals). Used to freeze profit at term-end — see
+  // profitAmount below.
+  private principalAsOf(investment: Investment, asOfDate: string, deltas: Withdrawal[]): number {
+    const netDelta = deltas.reduce((sum, w) => {
+      if (w.type === WithdrawalType.CREDIT) return sum + num(w.amount);
+      if (w.type === WithdrawalType.WITHDRAWAL) return sum - num(w.amount);
+      return sum;
+    }, 0);
+    let running = num(investment.investmentAmount) - netDelta;
+    for (const w of deltas) {
+      if (w.date > asOfDate) break;
+      if (w.type === WithdrawalType.CREDIT) running += num(w.amount);
+      else if (w.type === WithdrawalType.WITHDRAWAL) running -= num(w.amount);
+    }
+    return running;
+  }
+
+  // profitAmount is normally the live principal's profit at the current
+  // rate. But once an investment's term has ended, its profit is
+  // finalized on the terms of that term — a withdrawal made afterward
+  // (against the now-matured payout) must not retroactively shrink
+  // profit already earned. So once endDate has passed, profit is based
+  // on the principal as it stood on endDate instead of on investmentAmount
+  // as it stands today. finalAmount is always live principal + that
+  // profit; neither is stored, since investmentAmount itself moves as
   // credits/withdrawals land.
-  private withComputed(investment: Investment) {
-    const finalAmount =
-      num(investment.investmentAmount) +
-      (num(investment.investmentAmount) * num(investment.profitPercent)) / 100;
+  private withComputed(investment: Investment, deltas: Withdrawal[] = []) {
+    const principal = num(investment.investmentAmount);
+    const today = new Date().toISOString().slice(0, 10);
+    const termEnded =
+      investment.status !== InvestmentStatus.SETTLED &&
+      !!investment.endDate &&
+      investment.endDate <= today;
+    const profitBase = termEnded
+      ? this.principalAsOf(investment, investment.endDate as string, deltas)
+      : principal;
+    const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
+    const finalAmount = principal + profitAmount;
     return { ...investment, finalAmount };
+  }
+
+  // Batches the withdrawal ledger for a set of investments into one
+  // query instead of one per row, so findAll()/findForInvestor() stay
+  // O(1) round trips regardless of list size.
+  private async withComputedMany(investments: Investment[]) {
+    const ids = investments.map((i) => i.id);
+    const deltas = ids.length
+      ? await this.withdrawalsRepo.find({
+          where: { investmentId: In(ids) },
+          order: { date: 'ASC', createdAt: 'ASC' },
+        })
+      : [];
+    const byInvestment = new Map<number, Withdrawal[]>();
+    for (const d of deltas) {
+      if (!byInvestment.has(d.investmentId)) byInvestment.set(d.investmentId, []);
+      byInvestment.get(d.investmentId)!.push(d);
+    }
+    return investments.map((i) => this.withComputed(i, byInvestment.get(i.id) ?? []));
   }
 
   async findAll() {
     const investments = await this.repo.find({ order: { createdAt: 'DESC' } });
-    return investments.map((i) => this.withComputed(i));
+    return this.withComputedMany(investments);
   }
 
   async findForInvestor(investorId: number) {
@@ -53,7 +107,7 @@ export class InvestmentsService {
       where: { investorId },
       order: { createdAt: 'DESC' },
     });
-    return investments.map((i) => this.withComputed(i));
+    return this.withComputedMany(investments);
   }
 
   async findOne(id: number) {
@@ -74,7 +128,11 @@ export class InvestmentsService {
   async findOneWithComputed(id: number, ownerInvestorId: number | null = null) {
     const investment = await this.findOne(id);
     this.assertOwnership(investment, ownerInvestorId);
-    return this.withComputed(investment);
+    const deltas = await this.withdrawalsRepo.find({
+      where: { investmentId: id },
+      order: { date: 'ASC', createdAt: 'ASC' },
+    });
+    return this.withComputed(investment, deltas);
   }
 
   // endDate is always derived from startDate + the investor type's
@@ -241,7 +299,18 @@ export class InvestmentsService {
     }
 
     const principal = num(investment.investmentAmount);
-    const profitAmount = (principal * num(investment.profitPercent)) / 100;
+    // Profit is finalized on the principal as it stood at endDate, not
+    // on whatever investmentAmount happens to be right now — a
+    // withdrawal made after the term ended (but before this settlement
+    // is actually clicked) must not shrink the profit it earned over
+    // the full term. Applies the same way to FULL_SETTLEMENT (Short
+    // Term) and ROLLOVER (Rotation) investor types.
+    const deltas = await this.withdrawalsRepo.find({
+      where: { investmentId: investment.id },
+      order: { date: 'ASC', createdAt: 'ASC' },
+    });
+    const profitBase = this.principalAsOf(investment, investment.endDate, deltas);
+    const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
     const fullSettlement = investment.investorType?.settlementMode === SettlementMode.FULL_SETTLEMENT;
 
     investment.status = InvestmentStatus.SETTLED;

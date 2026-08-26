@@ -33,7 +33,7 @@ export class ReturnsController {
     @Query('returnPartyId') returnPartyId: string | undefined,
     @CurrentUser() user: AuthUser,
   ) {
-    if (user.role === UserRole.RETURN_PARTY) {
+    if (user.roles.includes(UserRole.RETURN_PARTY)) {
       return this.service.findForReturnParty(user.returnPartyId as number);
     }
     if (returnPartyId) return this.service.findForReturnParty(Number(returnPartyId));
@@ -94,6 +94,6 @@ export class ReturnsController {
   }
 
   private scopeFor(user: AuthUser): number | null {
-    return user.role === UserRole.RETURN_PARTY ? (user.returnPartyId as number) : null;
+    return user.roles.includes(UserRole.RETURN_PARTY) ? (user.returnPartyId as number) : null;
   }
 }

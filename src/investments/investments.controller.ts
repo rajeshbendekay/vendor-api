@@ -30,7 +30,7 @@ export class InvestmentsController {
   // so it can't be used to read someone else's investments.
   @Get()
   findAll(@Query('investorId') investorId: string | undefined, @CurrentUser() user: AuthUser) {
-    if (user.role === UserRole.INVESTOR) {
+    if (user.roles.includes(UserRole.INVESTOR)) {
       return this.service.findForInvestor(user.investorId as number);
     }
     if (investorId) return this.service.findForInvestor(Number(investorId));
@@ -91,6 +91,6 @@ export class InvestmentsController {
   }
 
   private scopeFor(user: AuthUser): number | null {
-    return user.role === UserRole.INVESTOR ? (user.investorId as number) : null;
+    return user.roles.includes(UserRole.INVESTOR) ? (user.investorId as number) : null;
   }
 }

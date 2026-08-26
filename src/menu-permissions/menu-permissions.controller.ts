@@ -25,6 +25,6 @@ export class MenuPermissionsController {
   // Any authenticated user (both roles) — drives what the frontend nav renders.
   @Get('mine')
   findMine(@CurrentUser() user: AuthUser) {
-    return this.service.findMine(user.role as UserRole);
+    return this.service.findMine(user.roles as UserRole[]);
   }
 }

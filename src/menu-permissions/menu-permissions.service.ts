@@ -1,6 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { MenuPermission } from './menu-permission.entity';
 import { UserRole } from '../users/user-role.enum';
 import { DEFAULT_VISIBILITY, MENU_KEYS, MENU_LABELS } from './menu-keys';
@@ -60,8 +60,11 @@ export class MenuPermissionsService {
     return this.findGrid();
   }
 
-  async findMine(role: UserRole) {
-    const rows = await this.repo.find({ where: { role, visible: true } });
-    return rows.map((r) => r.menuKey);
+  // Unions visibility across every role the caller holds, so a user with
+  // more than one role (e.g. both INVESTOR and RETURN_PARTY) sees the nav
+  // items for all of them.
+  async findMine(roles: UserRole[]) {
+    const rows = await this.repo.find({ where: { role: In(roles), visible: true } });
+    return [...new Set(rows.map((r) => r.menuKey))];
   }
 }

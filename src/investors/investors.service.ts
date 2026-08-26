@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -47,9 +48,13 @@ export class InvestorsService {
     return this.findOne(id);
   }
 
-  // Creates the Investor row and its linked login (User, role INVESTOR) in
-  // one transaction, so a form submit can't leave a KYC record with no way
-  // to log in, or vice versa.
+  // Creates the Investor row and links it to a login (User, role INVESTOR)
+  // in one transaction, so a form submit can't leave a KYC record with no
+  // way to log in, or vice versa. If a login already exists for this phone
+  // (e.g. the same person is already a return party), the INVESTOR role is
+  // added onto that existing login instead of inserting a second one —
+  // phone/email are globally unique on User, so one person can only ever
+  // have a single login shared across their roles.
   async create(dto: CreateInvestorDto) {
     const { password, ...investorFields } = dto;
     try {
@@ -57,15 +62,40 @@ export class InvestorsService {
         const investor = manager.create(Investor, investorFields);
         const savedInvestor = await manager.save(investor);
 
-        const user = manager.create(User, {
-          name: savedInvestor.name,
-          phone: savedInvestor.phone,
-          email: savedInvestor.email ?? null,
-          passwordHash: await bcrypt.hash(password, 10),
-          role: UserRole.INVESTOR,
-          investorId: savedInvestor.id,
+        const userRepo = manager.getRepository(User);
+        const existingUser = await userRepo.findOne({
+          where: { phone: savedInvestor.phone },
         });
-        await manager.save(user);
+
+        if (existingUser) {
+          if (existingUser.investorId) {
+            throw new ConflictException(
+              'This phone number is already linked to an investor account',
+            );
+          }
+          existingUser.investorId = savedInvestor.id;
+          if (!existingUser.roles.includes(UserRole.INVESTOR)) {
+            existingUser.roles = [...existingUser.roles, UserRole.INVESTOR];
+          }
+          if (savedInvestor.email) existingUser.email = savedInvestor.email;
+          if (password) existingUser.passwordHash = await bcrypt.hash(password, 10);
+          await userRepo.save(existingUser);
+        } else {
+          if (!password) {
+            throw new BadRequestException(
+              'Password is required to create a new login',
+            );
+          }
+          const user = userRepo.create({
+            name: savedInvestor.name,
+            phone: savedInvestor.phone,
+            email: savedInvestor.email ?? null,
+            passwordHash: await bcrypt.hash(password, 10),
+            roles: [UserRole.INVESTOR],
+            investorId: savedInvestor.id,
+          });
+          await userRepo.save(user);
+        }
 
         return savedInvestor;
       });
@@ -98,17 +128,35 @@ export class InvestorsService {
           await userRepo.save(linkedUser);
         } else if (password) {
           // No linked login yet (e.g. an investor created before this
-          // feature existed) — create one now instead of silently dropping
-          // the password the admin just typed in.
-          const newUser = userRepo.create({
-            name: investor.name,
-            phone: investor.phone,
-            email: investor.email ?? null,
-            passwordHash: await bcrypt.hash(password, 10),
-            role: UserRole.INVESTOR,
-            investorId: investor.id,
-          });
-          await userRepo.save(newUser);
+          // feature existed). If this phone already has a login (say, as a
+          // return party), add the INVESTOR role onto it instead of
+          // inserting a second login — otherwise create one from scratch
+          // instead of silently dropping the password the admin just
+          // typed in.
+          const existingUser = await userRepo.findOne({ where: { phone: investor.phone } });
+          if (existingUser) {
+            if (existingUser.investorId) {
+              throw new ConflictException(
+                'This phone number is already linked to an investor account',
+              );
+            }
+            existingUser.investorId = investor.id;
+            if (!existingUser.roles.includes(UserRole.INVESTOR)) {
+              existingUser.roles = [...existingUser.roles, UserRole.INVESTOR];
+            }
+            existingUser.passwordHash = await bcrypt.hash(password, 10);
+            await userRepo.save(existingUser);
+          } else {
+            const newUser = userRepo.create({
+              name: investor.name,
+              phone: investor.phone,
+              email: investor.email ?? null,
+              passwordHash: await bcrypt.hash(password, 10),
+              roles: [UserRole.INVESTOR],
+              investorId: investor.id,
+            });
+            await userRepo.save(newUser);
+          }
         }
 
         return investor;

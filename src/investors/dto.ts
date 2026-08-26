@@ -16,10 +16,11 @@ export class CreateInvestorDto {
   @IsOptional() @IsString() accountNumber?: string;
   @IsOptional() @IsString() ifscCode?: string;
 
-  // Login password for this investor — required on create so they can sign
-  // in with their phone/email immediately (see investors.service.ts, which
-  // creates the linked User account in the same transaction).
-  @IsString() @MinLength(8) password: string;
+  // Login password for this investor. Required to create a brand-new login
+  // on create; omit it if this phone already has a login (e.g. the same
+  // person is already a return party) — the INVESTOR role is added onto
+  // that existing login instead (see investors.service.ts).
+  @IsOptional() @IsString() @MinLength(8) password?: string;
 }
 
 // PartialType makes every field (including password) optional — on update,

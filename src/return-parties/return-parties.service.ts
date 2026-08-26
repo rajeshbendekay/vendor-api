@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ConflictException,
   ForbiddenException,
   Injectable,
@@ -47,9 +48,13 @@ export class ReturnPartiesService {
     return this.findOne(id);
   }
 
-  // Creates the ReturnParty row and its linked login (User, role
+  // Creates the ReturnParty row and links it to a login (User, role
   // RETURN_PARTY) in one transaction, so a form submit can't leave a KYC
-  // record with no way to log in, or vice versa.
+  // record with no way to log in, or vice versa. If a login already exists
+  // for this phone (e.g. the same person is already an investor), the
+  // RETURN_PARTY role is added onto that existing login instead of
+  // inserting a second one — phone/email are globally unique on User, so
+  // one person can only ever have a single login shared across their roles.
   async create(dto: CreateReturnPartyDto) {
     const { password, ...partyFields } = dto;
     try {
@@ -57,15 +62,40 @@ export class ReturnPartiesService {
         const party = manager.create(ReturnParty, partyFields);
         const savedParty = await manager.save(party);
 
-        const user = manager.create(User, {
-          name: savedParty.name,
-          phone: savedParty.phone,
-          email: savedParty.email ?? null,
-          passwordHash: await bcrypt.hash(password, 10),
-          role: UserRole.RETURN_PARTY,
-          returnPartyId: savedParty.id,
+        const userRepo = manager.getRepository(User);
+        const existingUser = await userRepo.findOne({
+          where: { phone: savedParty.phone },
         });
-        await manager.save(user);
+
+        if (existingUser) {
+          if (existingUser.returnPartyId) {
+            throw new ConflictException(
+              'This phone number is already linked to a return party account',
+            );
+          }
+          existingUser.returnPartyId = savedParty.id;
+          if (!existingUser.roles.includes(UserRole.RETURN_PARTY)) {
+            existingUser.roles = [...existingUser.roles, UserRole.RETURN_PARTY];
+          }
+          if (savedParty.email) existingUser.email = savedParty.email;
+          if (password) existingUser.passwordHash = await bcrypt.hash(password, 10);
+          await userRepo.save(existingUser);
+        } else {
+          if (!password) {
+            throw new BadRequestException(
+              'Password is required to create a new login',
+            );
+          }
+          const user = userRepo.create({
+            name: savedParty.name,
+            phone: savedParty.phone,
+            email: savedParty.email ?? null,
+            passwordHash: await bcrypt.hash(password, 10),
+            roles: [UserRole.RETURN_PARTY],
+            returnPartyId: savedParty.id,
+          });
+          await userRepo.save(user);
+        }
 
         return savedParty;
       });
@@ -98,17 +128,35 @@ export class ReturnPartiesService {
           await userRepo.save(linkedUser);
         } else if (password) {
           // No linked login yet (e.g. a return party created before this
-          // feature existed) — create one now instead of silently dropping
-          // the password the admin just typed in.
-          const newUser = userRepo.create({
-            name: party.name,
-            phone: party.phone,
-            email: party.email ?? null,
-            passwordHash: await bcrypt.hash(password, 10),
-            role: UserRole.RETURN_PARTY,
-            returnPartyId: party.id,
-          });
-          await userRepo.save(newUser);
+          // feature existed). If this phone already has a login (say, as
+          // an investor), add the RETURN_PARTY role onto it instead of
+          // inserting a second login — otherwise create one from scratch
+          // instead of silently dropping the password the admin just
+          // typed in.
+          const existingUser = await userRepo.findOne({ where: { phone: party.phone } });
+          if (existingUser) {
+            if (existingUser.returnPartyId) {
+              throw new ConflictException(
+                'This phone number is already linked to a return party account',
+              );
+            }
+            existingUser.returnPartyId = party.id;
+            if (!existingUser.roles.includes(UserRole.RETURN_PARTY)) {
+              existingUser.roles = [...existingUser.roles, UserRole.RETURN_PARTY];
+            }
+            existingUser.passwordHash = await bcrypt.hash(password, 10);
+            await userRepo.save(existingUser);
+          } else {
+            const newUser = userRepo.create({
+              name: party.name,
+              phone: party.phone,
+              email: party.email ?? null,
+              passwordHash: await bcrypt.hash(password, 10),
+              roles: [UserRole.RETURN_PARTY],
+              returnPartyId: party.id,
+            });
+            await userRepo.save(newUser);
+          }
         }
 
         return party;

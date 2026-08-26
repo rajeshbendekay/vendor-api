@@ -34,7 +34,7 @@ export class AdminSeedService implements OnModuleInit {
       phone: phone ?? null,
       email: email ?? null,
       password,
-      role: UserRole.ADMIN,
+      roles: [UserRole.ADMIN],
     });
     this.logger.log('Initial admin account created from ADMIN_* env vars.');
   }

@@ -12,14 +12,14 @@ import { UsersService } from '../../users/users.service';
 
 export interface AuthUser {
   id: number;
-  role: string;
+  roles: string[];
   investorId: number | null;
   returnPartyId: number | null;
 }
 
 interface JwtPayload {
   sub: number;
-  role: string;
+  roles: string[];
   investorId: number | null;
   returnPartyId: number | null;
 }
@@ -61,7 +61,7 @@ export class JwtAuthGuard implements CanActivate {
 
     const authUser: AuthUser = {
       id: user.id,
-      role: user.role,
+      roles: user.roles,
       investorId: user.investorId,
       returnPartyId: user.returnPartyId,
     };

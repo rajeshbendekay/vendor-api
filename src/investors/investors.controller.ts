@@ -22,7 +22,7 @@ export class InvestorsController {
   // Both roles can call this — an INVESTOR only ever gets their own record.
   @Get()
   findAll(@CurrentUser() user: AuthUser) {
-    if (user.role === UserRole.INVESTOR) {
+    if (user.roles.includes(UserRole.INVESTOR)) {
       return this.service.findAllForInvestor(user.investorId as number);
     }
     return this.service.findAll();
@@ -30,7 +30,7 @@ export class InvestorsController {
 
   @Get(':id')
   findOne(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: AuthUser) {
-    if (user.role === UserRole.INVESTOR) {
+    if (user.roles.includes(UserRole.INVESTOR)) {
       return this.service.findOneForInvestor(id, user.investorId as number);
     }
     return this.service.findOne(id);

@@ -8,13 +8,14 @@ import {
   Post,
 } from '@nestjs/common';
 import { UsersService } from './users.service';
-import { CreateUserDto, UpdateUserDto } from './dto';
+import { AddUserRolesDto, CreateUserDto, UpdateUserDto } from './dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from './user-role.enum';
 
-// Admin-only account management screen. Investor-role accounts are created
-// via POST /investors instead (see investors.controller.ts) — this endpoint
-// only ever creates/manages ADMIN accounts.
+// Admin-only account management screen — also the single onboarding entry
+// point: POST /users creates a login with one or more roles at once
+// (ADMIN/INVESTOR/RETURN_PARTY), creating the linked Investor/ReturnParty
+// KYC row(s) as needed (see users.service.ts).
 @Controller('users')
 @Roles(UserRole.ADMIN)
 export class UsersController {
@@ -38,5 +39,11 @@ export class UsersController {
   @Patch(':id')
   update(@Param('id', ParseIntPipe) id: number, @Body() dto: UpdateUserDto) {
     return this.service.update(id, dto);
+  }
+
+  // Adds roles onto an existing login — add-only (see UsersService.addRoles).
+  @Patch(':id/roles')
+  addRoles(@Param('id', ParseIntPipe) id: number, @Body() dto: AddUserRolesDto) {
+    return this.service.addRoles(id, dto);
   }
 }

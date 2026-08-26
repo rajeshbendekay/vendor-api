@@ -14,9 +14,12 @@ import { UserRole } from './user-role.enum';
 // Login account for the app. Kept separate from Investor/ReturnParty (pure
 // KYC/business data with no login concept of its own) so admins — who have
 // no Investor/ReturnParty record — and investors/return parties share one
-// login table. When role is INVESTOR, investorId links to the investor's
-// own data; when role is RETURN_PARTY, returnPartyId links to the return
-// party's own data; both stay null for ADMIN.
+// login table. One login can hold more than one role (e.g. the same person
+// is both an investor and a return party): roles is INVESTOR and/or
+// RETURN_PARTY and/or ADMIN. investorId links to the investor's own data
+// when INVESTOR is one of the roles; returnPartyId links to the return
+// party's own data when RETURN_PARTY is one of the roles; both stay null
+// for a pure ADMIN.
 @Entity('users')
 export class User {
   @PrimaryGeneratedColumn()
@@ -34,8 +37,8 @@ export class User {
   @Column()
   passwordHash: string;
 
-  @Column({ type: 'enum', enum: UserRole })
-  role: UserRole;
+  @Column({ name: 'role', type: 'simple-array' })
+  roles: UserRole[];
 
   @Column({ type: 'int', nullable: true, unique: true })
   investorId: number | null;
