@@ -19,6 +19,8 @@ export const MENU_KEYS = [
   'my-returns',
   'loans',
   'loan-types',
+  'expenses',
+  'expense-types',
   'settings',
   'users',
 ] as const;
@@ -41,6 +43,8 @@ export const MENU_LABELS: Record<MenuKey, string> = {
   'my-returns': 'My Returns',
   loans: 'Loans',
   'loan-types': 'Loan Types',
+  expenses: 'Expenses',
+  'expense-types': 'Expense Types',
   settings: 'Menu Settings',
   users: 'Users',
 };
@@ -64,6 +68,8 @@ export const DEFAULT_VISIBILITY: Record<MenuKey, Record<UserRole, boolean>> = {
   'my-returns': { [UserRole.ADMIN]: false, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: true },
   loans: { [UserRole.ADMIN]: true, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: false },
   'loan-types': { [UserRole.ADMIN]: true, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: false },
+  expenses: { [UserRole.ADMIN]: true, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: false },
+  'expense-types': { [UserRole.ADMIN]: true, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: false },
   settings: { [UserRole.ADMIN]: true, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: false },
   users: { [UserRole.ADMIN]: true, [UserRole.INVESTOR]: false, [UserRole.RETURN_PARTY]: false },
 };

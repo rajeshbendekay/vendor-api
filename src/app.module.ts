@@ -21,6 +21,8 @@ import { User } from './users/user.entity';
 import { MenuPermission } from './menu-permissions/menu-permission.entity';
 import { LoanType } from './loan-types/loan-type.entity';
 import { Loan } from './loans/loan.entity';
+import { ExpenseType } from './expense-types/expense-type.entity';
+import { Expense } from './expenses/expense.entity';
 
 import { VendorsModule } from './vendors/vendors.module';
 import { ClientsModule } from './clients/clients.module';
@@ -35,6 +37,8 @@ import { ReturnTypesModule } from './return-types/return-types.module';
 import { ReturnsModule } from './returns/returns.module';
 import { LoanTypesModule } from './loan-types/loan-types.module';
 import { LoansModule } from './loans/loans.module';
+import { ExpenseTypesModule } from './expense-types/expense-types.module';
+import { ExpensesModule } from './expenses/expenses.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
@@ -73,6 +77,8 @@ import { ProfileModule } from './profile/profile.module';
           MenuPermission,
           LoanType,
           Loan,
+          ExpenseType,
+          Expense,
         ],
         synchronize: true, // dev convenience: auto-create/update tables
       }),
@@ -90,6 +96,8 @@ import { ProfileModule } from './profile/profile.module';
     ReturnsModule,
     LoanTypesModule,
     LoansModule,
+    ExpenseTypesModule,
+    ExpensesModule,
     DashboardModule,
     AuthModule,
     UsersModule,
