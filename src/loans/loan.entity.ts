@@ -8,6 +8,7 @@ import {
   UpdateDateColumn,
 } from 'typeorm';
 import { LoanType } from '../loan-types/loan-type.entity';
+import { User } from '../users/user.entity';
 
 export const LoanStatus = {
   ACTIVE: 'ACTIVE',
@@ -16,10 +17,11 @@ export const LoanStatus = {
 export type LoanStatus = (typeof LoanStatus)[keyof typeof LoanStatus];
 
 // A loan the business has taken FROM a lender (bank, gold-loan provider,
-// credit card, OD facility, etc.) — the business itself is the borrower;
-// name/phone/PAN/Aadhaar/bankName here identify the lender. Lender details
-// are kept flat on the loan itself (not a separate reusable entity) — if
-// the same lender extends another loan, it's a new row.
+// credit card, OD facility, etc.) — the business itself is the borrower.
+// lenderId points at a User with the LENDER role (onboarded via the Users
+// screen) — the same lender can be reused across multiple loans. The rest
+// of the identity-ish fields (phone/PAN/Aadhaar/bankName) stay flat on the
+// loan itself, independent of the lender's own User record.
 //
 // isInterestOnly decides which repayment fields apply — the two modes
 // are mutually exclusive, not just a display toggle:
@@ -34,8 +36,13 @@ export type LoanStatus = (typeof LoanStatus)[keyof typeof LoanStatus];
 //    — both entered directly. interestPercent/interestAmount are
 //    irrelevant and left null.
 //
-// principalOutstanding starts equal to loanAmount and is edited directly
-// as repayments are made — there's no separate payment ledger.
+// principalOutstanding starts equal to loanAmount and is drawn down by
+// REPAYMENT transactions (see loan-transaction.entity.ts) — mirrors
+// Investment.investmentAmount. interestOutstanding starts at 0 and is
+// built up by automatic monthly INTEREST_ACCRUAL transactions (interest-
+// only loans only — see LoansService.syncAccruals) and drawn down by
+// REPAYMENT transactions the same way. Both are real running balances now,
+// not admin-edited directly.
 // endDate is derived from startDate + totalEmis months whenever either
 // changes, mirroring how Investment.endDate is derived.
 @Entity('loans')
@@ -44,10 +51,17 @@ export class Loan {
   id: number;
 
   @Column()
-  name: string;
+  lenderId: number;
 
-  @Column()
-  phone: string;
+  // Not eager — LoansService explicitly loads this relation and strips
+  // passwordHash before returning, so a plain `find()` here can never leak
+  // a login's password hash into a loan response.
+  @ManyToOne(() => User)
+  @JoinColumn({ name: 'lenderId' })
+  lender: User;
+
+  @Column({ type: 'varchar', nullable: true })
+  phone: string | null;
 
   @Column({ nullable: true })
   pan: string;
@@ -94,6 +108,9 @@ export class Loan {
 
   @Column({ type: 'decimal', precision: 12, scale: 2 })
   principalOutstanding: number;
+
+  @Column({ type: 'decimal', precision: 12, scale: 2, default: 0 })
+  interestOutstanding: number;
 
   @Column({ type: 'date', nullable: true })
   startDate: string | null;

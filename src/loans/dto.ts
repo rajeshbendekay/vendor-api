@@ -13,11 +13,10 @@ import { PartialType } from '@nestjs/mapped-types';
 import { LoanStatus } from './loan.entity';
 
 export class CreateLoanDto {
-  @IsString()
-  name: string;
+  @IsInt()
+  lenderId: number;
 
-  @IsString()
-  phone: string;
+  @IsOptional() @IsString() phone?: string;
 
   @IsOptional() @IsString() pan?: string;
   @IsOptional() @IsString() aadhaar?: string;
@@ -51,3 +50,13 @@ export class CreateLoanDto {
 }
 
 export class UpdateLoanDto extends PartialType(CreateLoanDto) {}
+
+// POST /loans/:id/repay — at least one of principalAmount/interestAmount
+// must be positive; enforced in LoansService.repay, not here, since it's
+// a cross-field rule.
+export class RepayLoanDto {
+  @IsOptional() @IsNumber() @Min(0) principalAmount?: number;
+  @IsOptional() @IsNumber() @Min(0) interestAmount?: number;
+  @IsOptional() @IsDateString() date?: string;
+  @IsOptional() @IsString() notes?: string;
+}

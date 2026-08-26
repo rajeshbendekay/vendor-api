@@ -117,6 +117,11 @@ export class UsersService {
         'Name and phone are required to onboard an Investor or Return Party role',
       );
     }
+    // LENDER has no linked KYC entity, but still needs a name — it's what
+    // shows up in the Loans page's lender dropdown.
+    if (dto.roles.includes(UserRole.LENDER) && !dto.name?.trim()) {
+      throw new BadRequestException('Name is required to onboard the Lender role');
+    }
 
     try {
       return await this.dataSource.transaction(async (manager) => {
@@ -170,6 +175,11 @@ export class UsersService {
       if (needsKyc && (!user.name?.trim() || !user.phone?.trim())) {
         throw new BadRequestException(
           'This account needs a name and phone before an Investor or Return Party role can be added — edit the account first',
+        );
+      }
+      if (rolesToAdd.includes(UserRole.LENDER) && !user.name?.trim()) {
+        throw new BadRequestException(
+          'This account needs a name before the Lender role can be added — edit the account first',
         );
       }
 

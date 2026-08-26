@@ -21,6 +21,7 @@ import { User } from './users/user.entity';
 import { MenuPermission } from './menu-permissions/menu-permission.entity';
 import { LoanType } from './loan-types/loan-type.entity';
 import { Loan } from './loans/loan.entity';
+import { LoanTransaction } from './loans/loan-transaction.entity';
 import { ExpenseType } from './expense-types/expense-type.entity';
 import { Expense } from './expenses/expense.entity';
 
@@ -77,6 +78,7 @@ import { ProfileModule } from './profile/profile.module';
           MenuPermission,
           LoanType,
           Loan,
+          LoanTransaction,
           ExpenseType,
           Expense,
         ],

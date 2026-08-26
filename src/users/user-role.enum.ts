@@ -2,4 +2,5 @@ export enum UserRole {
   ADMIN = 'ADMIN',
   INVESTOR = 'INVESTOR',
   RETURN_PARTY = 'RETURN_PARTY',
+  LENDER = 'LENDER',
 }

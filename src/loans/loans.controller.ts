@@ -9,7 +9,7 @@ import {
   Post,
 } from '@nestjs/common';
 import { LoansService } from './loans.service';
-import { CreateLoanDto, UpdateLoanDto } from './dto';
+import { CreateLoanDto, RepayLoanDto, UpdateLoanDto } from './dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { UserRole } from '../users/user-role.enum';
 
@@ -41,5 +41,15 @@ export class LoansController {
   @Delete(':id')
   remove(@Param('id', ParseIntPipe) id: number) {
     return this.service.remove(id);
+  }
+
+  @Post(':id/repay')
+  repay(@Param('id', ParseIntPipe) id: number, @Body() dto: RepayLoanDto) {
+    return this.service.repay(id, dto);
+  }
+
+  @Get(':id/transactions')
+  findTransactions(@Param('id', ParseIntPipe) id: number) {
+    return this.service.findTransactions(id);
   }
 }
