@@ -5,7 +5,7 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { In, Repository } from 'typeorm';
 import { Return, ReturnStatus } from './return.entity';
 import { ReturnWithdrawal, ReturnWithdrawalType } from './return-withdrawal.entity';
 import {
@@ -33,18 +33,55 @@ export class ReturnsService {
     private readonly returnTypesService: ReturnTypesService,
   ) {}
 
-  // finalAmount is the live principal plus profit at the current rate;
-  // computed, not stored, since returnAmount itself moves as
-  // credits/withdrawals land.
-  private withComputed(ret: Return) {
-    const finalAmount =
-      num(ret.returnAmount) + (num(ret.returnAmount) * num(ret.profitPercent)) / 100;
+  private today(): string {
+    return new Date().toISOString().slice(0, 10);
+  }
+
+  // profitAmount is computed off a basis that only grows (credits) and
+  // is never reduced by a Withdrawal: a Withdrawal draws down
+  // returnAmount as the balance still owed to the return party, but the
+  // profit earned over the term must stay intact regardless of how much
+  // (or when) principal is drawn down — only PFS (settleProfit) actually
+  // finalizes/closes it out. Adding back every WITHDRAWAL amount ever
+  // taken from this row to the live principal reconstructs that basis
+  // (openingPrincipal + credits) without needing a stored snapshot.
+  // finalAmount is always live principal + that profit; neither is
+  // stored, since returnAmount itself moves as credits/withdrawals land.
+  private withComputed(ret: Return, withdrawnTotal = 0) {
+    const principal = num(ret.returnAmount);
+    const profitBase = principal + withdrawnTotal;
+    const profitAmount = (profitBase * num(ret.profitPercent)) / 100;
+    const finalAmount = principal + profitAmount;
     return { ...ret, finalAmount };
+  }
+
+  private async withdrawnTotal(returnId: number): Promise<number> {
+    const withdrawals = await this.withdrawalsRepo.find({
+      where: { returnId, type: ReturnWithdrawalType.WITHDRAWAL },
+    });
+    return withdrawals.reduce((sum, w) => sum + num(w.amount), 0);
+  }
+
+  // Batches the withdrawal totals for a set of returns into one query
+  // instead of one per row, so findAll()/findForReturnParty() stay O(1)
+  // round trips regardless of list size.
+  private async withComputedMany(returns: Return[]) {
+    const ids = returns.map((r) => r.id);
+    const withdrawals = ids.length
+      ? await this.withdrawalsRepo.find({
+          where: { returnId: In(ids), type: ReturnWithdrawalType.WITHDRAWAL },
+        })
+      : [];
+    const totals = new Map<number, number>();
+    for (const w of withdrawals) {
+      totals.set(w.returnId, (totals.get(w.returnId) ?? 0) + num(w.amount));
+    }
+    return returns.map((r) => this.withComputed(r, totals.get(r.id) ?? 0));
   }
 
   async findAll() {
     const returns = await this.repo.find({ order: { createdAt: 'DESC' } });
-    return returns.map((r) => this.withComputed(r));
+    return this.withComputedMany(returns);
   }
 
   async findForReturnParty(returnPartyId: number) {
@@ -52,7 +89,7 @@ export class ReturnsService {
       where: { returnPartyId },
       order: { createdAt: 'DESC' },
     });
-    return returns.map((r) => this.withComputed(r));
+    return this.withComputedMany(returns);
   }
 
   async findOne(id: number) {
@@ -74,7 +111,7 @@ export class ReturnsService {
   async findOneWithComputed(id: number, ownerReturnPartyId: number | null = null) {
     const ret = await this.findOne(id);
     this.assertOwnership(ret, ownerReturnPartyId);
-    return this.withComputed(ret);
+    return this.withComputed(ret, await this.withdrawnTotal(id));
   }
 
   // endDate is always derived from startDate + the return type's
@@ -178,13 +215,28 @@ export class ReturnsService {
   // off a new installment is PFS's job alone (see settleProfit below).
   // Neither is allowed once settled: a settled installment is closed
   // for good — its balance moves forward only via a new installment.
+  // For ROLLOVER (e.g. Rotation) return types specifically, neither is
+  // allowed either once the installment's term has ended — the correct
+  // next step there is PFS (roll principal into a new installment), not
+  // an ad-hoc credit/withdrawal against a matured row. FULL_SETTLEMENT
+  // (e.g. Short Term) has no such restriction: a withdrawal there is a
+  // legitimate partial payout of the matured funds pending PFS closeout.
   async withdraw(returnId: number, dto: CreateReturnWithdrawalDto) {
     const ret = await this.findOne(returnId);
     const type = dto.type ?? ReturnWithdrawalType.WITHDRAWAL;
-    const date = dto.date || new Date().toISOString().slice(0, 10);
+    const date = dto.date || this.today();
 
     if (ret.status === ReturnStatus.SETTLED) {
       throw new BadRequestException('This return is already settled');
+    }
+    if (
+      ret.returnType?.settlementMode === ReturnSettlementMode.ROLLOVER &&
+      ret.endDate &&
+      ret.endDate <= this.today()
+    ) {
+      throw new BadRequestException(
+        'This installment has passed its end date — settle profit (PFS) to roll it into a new installment before crediting or withdrawing',
+      );
     }
 
     if (type === ReturnWithdrawalType.WITHDRAWAL) {
@@ -194,11 +246,14 @@ export class ReturnsService {
           `Withdrawal amount exceeds current return of ${principal.toFixed(2)}`,
         );
       }
+      // A zero balance does NOT settle the return — settlement is only
+      // ever triggered explicitly via PFS (see settleProfit below).
+      // Profit stays intact and available while ACTIVE even at ₹0
+      // principal, since withComputed's profit basis doesn't depend on
+      // the live balance.
       ret.returnAmount = Math.max(0, principal - dto.amount);
-      ret.status = ret.returnAmount <= 0.01 ? ReturnStatus.SETTLED : ReturnStatus.ACTIVE;
     } else {
       ret.returnAmount = num(ret.returnAmount) + dto.amount;
-      ret.status = ReturnStatus.ACTIVE;
     }
     await this.repo.save(ret);
 
@@ -234,7 +289,13 @@ export class ReturnsService {
     }
 
     const principal = num(ret.returnAmount);
-    const profitAmount = (principal * num(ret.profitPercent)) / 100;
+    // Profit is finalized on the same basis as the live display (see
+    // withComputed): principal plus everything ever withdrawn from this
+    // row, so a withdrawal made at any point during the term doesn't
+    // shrink the profit it earned. Applies the same way to
+    // FULL_SETTLEMENT (Short Term) and ROLLOVER (Rotation) return types.
+    const profitBase = principal + (await this.withdrawnTotal(ret.id));
+    const profitAmount = (profitBase * num(ret.profitPercent)) / 100;
     const fullSettlement = ret.returnType?.settlementMode === ReturnSettlementMode.FULL_SETTLEMENT;
 
     ret.status = ReturnStatus.SETTLED;
@@ -348,8 +409,9 @@ export class ReturnsService {
         principal = principalBeforeThis + dto.amount;
       }
 
+      // A zero (or edited-down) balance does NOT settle the return —
+      // settlement is only ever triggered explicitly via PFS.
       ret.returnAmount = principal;
-      ret.status = principal <= 0.01 ? ReturnStatus.SETTLED : ReturnStatus.ACTIVE;
       await this.repo.save(ret);
       withdrawal.amount = dto.amount;
     }

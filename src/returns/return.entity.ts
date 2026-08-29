@@ -20,8 +20,9 @@ export type ReturnStatus = (typeof ReturnStatus)[keyof typeof ReturnStatus];
 // A single payout arrangement for a return party. One return party can have
 // many returns (1:N) — each with its own type, amount, and term.
 // returnAmount is the live principal: a Credit tops it up in place, a
-// Withdrawal draws it down; once it hits 0 the return is marked SETTLED
-// and locked from further edits/deletes/withdrawals/PFS.
+// Withdrawal draws it down — even down to 0, it stays ACTIVE. SETTLED is
+// only ever set explicitly via PFS (settleProfit), which then locks the
+// row from further edits/deletes/withdrawals/PFS.
 // installment counts which tranche this row represents within its chain;
 // rootReturnId links a PFS-spun-off installment back to installment #1 of
 // that same chain (null on installment #1 itself — treat
