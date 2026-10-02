@@ -47,12 +47,12 @@ export class ReturnsService {
   // (openingPrincipal + credits) without needing a stored snapshot.
   // finalAmount is always live principal + that profit; neither is
   // stored, since returnAmount itself moves as credits/withdrawals land.
-  private withComputed(ret: Return, withdrawnTotal = 0) {
+  private withComputed(ret: Return, withdrawnTotal = 0, initialAmount = 0) {
     const principal = num(ret.returnAmount);
     const profitBase = principal + withdrawnTotal;
     const profitAmount = (profitBase * num(ret.profitPercent)) / 100;
     const finalAmount = principal + profitAmount;
-    return { ...ret, finalAmount };
+    return { ...ret, finalAmount, initialAmount };
   }
 
   private async withdrawnTotal(returnId: number): Promise<number> {
@@ -62,21 +62,50 @@ export class ReturnsService {
     return withdrawals.reduce((sum, w) => sum + num(w.amount), 0);
   }
 
-  // Batches the withdrawal totals for a set of returns into one query
-  // instead of one per row, so findAll()/findForReturnParty() stay O(1)
+  // Batches the withdrawal totals and initial amounts for a set of
+  // returns into a fixed number of queries instead of one per row, so
+  // findAll()/findForReturnParty() stay O(1)
   // round trips regardless of list size.
+  // initialAmount is the chain's original principal — installment #1's
+  // opening balance before any credit/withdrawal, derived the same way
+  // as findWithdrawals' openingPrincipal (unwinding every CREDIT/
+  // WITHDRAWAL delta from its live returnAmount) rather than stored.
   private async withComputedMany(returns: Return[]) {
     const ids = returns.map((r) => r.id);
-    const withdrawals = ids.length
+    const rootIds = [...new Set(returns.map((r) => r.rootReturnId ?? r.id))];
+    const known = new Map(returns.map((r) => [r.id, r]));
+    const missingRootIds = rootIds.filter((id) => !known.has(id));
+    const fetchedRoots = missingRootIds.length
+      ? await this.repo.find({ where: { id: In(missingRootIds) }, withDeleted: true })
+      : [];
+    for (const r of fetchedRoots) known.set(r.id, r);
+
+    const txnIds = [...new Set([...ids, ...rootIds])];
+    const txns = txnIds.length
       ? await this.withdrawalsRepo.find({
-          where: { returnId: In(ids), type: ReturnWithdrawalType.WITHDRAWAL },
+          where: {
+            returnId: In(txnIds),
+            type: In([ReturnWithdrawalType.WITHDRAWAL, ReturnWithdrawalType.CREDIT]),
+          },
         })
       : [];
-    const totals = new Map<number, number>();
-    for (const w of withdrawals) {
-      totals.set(w.returnId, (totals.get(w.returnId) ?? 0) + num(w.amount));
+    const withdrawn = new Map<number, number>();
+    const netDelta = new Map<number, number>();
+    for (const w of txns) {
+      const amount = num(w.amount);
+      if (w.type === ReturnWithdrawalType.WITHDRAWAL) {
+        withdrawn.set(w.returnId, (withdrawn.get(w.returnId) ?? 0) + amount);
+      }
+      const delta = w.type === ReturnWithdrawalType.CREDIT ? amount : -amount;
+      netDelta.set(w.returnId, (netDelta.get(w.returnId) ?? 0) + delta);
     }
-    return returns.map((r) => this.withComputed(r, totals.get(r.id) ?? 0));
+    const initialFor = (rootId: number) => {
+      const root = known.get(rootId);
+      return root ? num(root.returnAmount) - (netDelta.get(rootId) ?? 0) : 0;
+    };
+    return returns.map((r) =>
+      this.withComputed(r, withdrawn.get(r.id) ?? 0, initialFor(r.rootReturnId ?? r.id)),
+    );
   }
 
   async findAll() {
@@ -111,7 +140,8 @@ export class ReturnsService {
   async findOneWithComputed(id: number, ownerReturnPartyId: number | null = null) {
     const ret = await this.findOne(id);
     this.assertOwnership(ret, ownerReturnPartyId);
-    return this.withComputed(ret, await this.withdrawnTotal(id));
+    const [computed] = await this.withComputedMany([ret]);
+    return computed;
   }
 
   // endDate is always derived from startDate + the return type's

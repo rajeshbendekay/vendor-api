@@ -48,12 +48,12 @@ export class InvestmentsService {
   // finalAmount is always live principal + that profit; neither is
   // stored, since investmentAmount itself moves as credits/withdrawals
   // land.
-  private withComputed(investment: Investment, withdrawnTotal = 0) {
+  private withComputed(investment: Investment, withdrawnTotal = 0, initialAmount = 0) {
     const principal = num(investment.investmentAmount);
     const profitBase = principal + withdrawnTotal;
     const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
     const finalAmount = principal + profitAmount;
-    return { ...investment, finalAmount };
+    return { ...investment, finalAmount, initialAmount };
   }
 
   private async withdrawnTotal(investmentId: number): Promise<number> {
@@ -63,21 +63,50 @@ export class InvestmentsService {
     return withdrawals.reduce((sum, w) => sum + num(w.amount), 0);
   }
 
-  // Batches the withdrawal totals for a set of investments into one
-  // query instead of one per row, so findAll()/findForInvestor() stay
-  // O(1) round trips regardless of list size.
+  // Batches the withdrawal totals and initial amounts for a set of
+  // investments into a fixed number of queries instead of one per row, so
+  // findAll()/findForInvestor() stay O(1)
+  // round trips regardless of list size.
+  // initialAmount is the chain's original principal — installment #1's
+  // opening balance before any credit/withdrawal, derived the same way
+  // as findWithdrawals' openingPrincipal (unwinding every CREDIT/
+  // WITHDRAWAL delta from its live investmentAmount) rather than stored.
   private async withComputedMany(investments: Investment[]) {
-    const ids = investments.map((i) => i.id);
-    const withdrawals = ids.length
+    const ids = investments.map((r) => r.id);
+    const rootIds = [...new Set(investments.map((r) => r.rootInvestmentId ?? r.id))];
+    const known = new Map(investments.map((r) => [r.id, r]));
+    const missingRootIds = rootIds.filter((id) => !known.has(id));
+    const fetchedRoots = missingRootIds.length
+      ? await this.repo.find({ where: { id: In(missingRootIds) }, withDeleted: true })
+      : [];
+    for (const r of fetchedRoots) known.set(r.id, r);
+
+    const txnIds = [...new Set([...ids, ...rootIds])];
+    const txns = txnIds.length
       ? await this.withdrawalsRepo.find({
-          where: { investmentId: In(ids), type: WithdrawalType.WITHDRAWAL },
+          where: {
+            investmentId: In(txnIds),
+            type: In([WithdrawalType.WITHDRAWAL, WithdrawalType.CREDIT]),
+          },
         })
       : [];
-    const totals = new Map<number, number>();
-    for (const w of withdrawals) {
-      totals.set(w.investmentId, (totals.get(w.investmentId) ?? 0) + num(w.amount));
+    const withdrawn = new Map<number, number>();
+    const netDelta = new Map<number, number>();
+    for (const w of txns) {
+      const amount = num(w.amount);
+      if (w.type === WithdrawalType.WITHDRAWAL) {
+        withdrawn.set(w.investmentId, (withdrawn.get(w.investmentId) ?? 0) + amount);
+      }
+      const delta = w.type === WithdrawalType.CREDIT ? amount : -amount;
+      netDelta.set(w.investmentId, (netDelta.get(w.investmentId) ?? 0) + delta);
     }
-    return investments.map((i) => this.withComputed(i, totals.get(i.id) ?? 0));
+    const initialFor = (rootId: number) => {
+      const root = known.get(rootId);
+      return root ? num(root.investmentAmount) - (netDelta.get(rootId) ?? 0) : 0;
+    };
+    return investments.map((r) =>
+      this.withComputed(r, withdrawn.get(r.id) ?? 0, initialFor(r.rootInvestmentId ?? r.id)),
+    );
   }
 
   async findAll() {
@@ -111,7 +140,8 @@ export class InvestmentsService {
   async findOneWithComputed(id: number, ownerInvestorId: number | null = null) {
     const investment = await this.findOne(id);
     this.assertOwnership(investment, ownerInvestorId);
-    return this.withComputed(investment, await this.withdrawnTotal(id));
+    const [computed] = await this.withComputedMany([investment]);
+    return computed;
   }
 
   // endDate is always derived from startDate + the investor type's
