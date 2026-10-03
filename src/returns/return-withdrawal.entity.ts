@@ -12,11 +12,14 @@ export enum ReturnWithdrawalType {
   WITHDRAWAL = 'WITHDRAWAL',
   CREDIT = 'CREDIT',
   PROFIT_SETTLEMENT = 'PROFIT_SETTLEMENT',
+  PARTIAL_SETTLEMENT = 'PARTIAL_SETTLEMENT',
 }
 
 // A single credit (principal top-up), withdrawal (principal reduction), or
 // profit settlement (PFS — closes out an installment's profit and rolls
-// its principal into the next one) applied to a return row. installment
+// its principal into the next one), or partial settlement (a payout of
+// part of the outstanding amount that leaves the installment ACTIVE, like
+// a part-payment of a credit card bill) applied to a return row. installment
 // records which tranche the transaction was attributed to at the time it
 // was made.
 @Entity('return_withdrawals')

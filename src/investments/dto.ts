@@ -59,3 +59,16 @@ export class UpdateWithdrawalDto {
 
   @IsOptional() @IsString() notes?: string;
 }
+
+// A payout of part of the outstanding amount (see settlePartial). The
+// full outstanding amount is settled via PFS instead, which closes out
+// the installment.
+export class CreatePartialSettlementDto {
+  @IsNumber()
+  @Min(0.01)
+  amount: number;
+
+  @IsOptional() @IsDateString() date?: string;
+
+  @IsOptional() @IsString() notes?: string;
+}

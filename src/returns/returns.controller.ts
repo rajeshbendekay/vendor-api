@@ -12,6 +12,7 @@ import {
 import { ReturnsService } from './returns.service';
 import {
   CreateReturnDto,
+  CreateReturnPartialSettlementDto,
   CreateReturnWithdrawalDto,
   UpdateReturnDto,
   UpdateReturnWithdrawalDto,
@@ -76,6 +77,15 @@ export class ReturnsController {
   @Roles(UserRole.ADMIN)
   settleProfit(@Param('id', ParseIntPipe) id: number) {
     return this.service.settleProfit(id);
+  }
+
+  @Post(':id/settle-partial')
+  @Roles(UserRole.ADMIN)
+  settlePartial(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateReturnPartialSettlementDto,
+  ) {
+    return this.service.settlePartial(id, dto);
   }
 
   @Get(':id/withdrawals')

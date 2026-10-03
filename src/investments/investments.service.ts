@@ -10,6 +10,7 @@ import { Investment, InvestmentStatus } from './investment.entity';
 import { Withdrawal, WithdrawalType } from './withdrawal.entity';
 import {
   CreateInvestmentDto,
+  CreatePartialSettlementDto,
   CreateWithdrawalDto,
   UpdateInvestmentDto,
   UpdateWithdrawalDto,
@@ -48,12 +49,28 @@ export class InvestmentsService {
   // finalAmount is always live principal + that profit; neither is
   // stored, since investmentAmount itself moves as credits/withdrawals
   // land.
-  private withComputed(investment: Investment, withdrawnTotal = 0, initialAmount = 0) {
+  // settledAmount is what's already been paid out via partial
+  // settlements; outstandingAmount is what's still owed on settlement —
+  // principal + profit for FULL_SETTLEMENT, profit alone for ROLLOVER
+  // (its principal rolls into the next installment instead) — less
+  // settledAmount, like a credit card's outstanding balance.
+  private withComputed(
+    investment: Investment,
+    withdrawnTotal = 0,
+    initialAmount = 0,
+    settledAmount = 0,
+  ) {
     const principal = num(investment.investmentAmount);
     const profitBase = principal + withdrawnTotal;
     const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
     const finalAmount = principal + profitAmount;
-    return { ...investment, finalAmount, initialAmount };
+    const settleable =
+      investment.investorType?.settlementMode === SettlementMode.FULL_SETTLEMENT
+        ? finalAmount
+        : profitAmount;
+    const outstandingAmount =
+      investment.status === InvestmentStatus.SETTLED ? 0 : Math.max(0, settleable - settledAmount);
+    return { ...investment, finalAmount, initialAmount, settledAmount, outstandingAmount };
   }
 
   private async withdrawnTotal(investmentId: number): Promise<number> {
@@ -86,14 +103,23 @@ export class InvestmentsService {
       ? await this.withdrawalsRepo.find({
           where: {
             investmentId: In(txnIds),
-            type: In([WithdrawalType.WITHDRAWAL, WithdrawalType.CREDIT]),
+            type: In([
+              WithdrawalType.WITHDRAWAL,
+              WithdrawalType.CREDIT,
+              WithdrawalType.PARTIAL_SETTLEMENT,
+            ]),
           },
         })
       : [];
     const withdrawn = new Map<number, number>();
     const netDelta = new Map<number, number>();
+    const settled = new Map<number, number>();
     for (const w of txns) {
       const amount = num(w.amount);
+      if (w.type === WithdrawalType.PARTIAL_SETTLEMENT) {
+        settled.set(w.investmentId, (settled.get(w.investmentId) ?? 0) + amount);
+        continue;
+      }
       if (w.type === WithdrawalType.WITHDRAWAL) {
         withdrawn.set(w.investmentId, (withdrawn.get(w.investmentId) ?? 0) + amount);
       }
@@ -105,7 +131,12 @@ export class InvestmentsService {
       return root ? num(root.investmentAmount) - (netDelta.get(rootId) ?? 0) : 0;
     };
     return investments.map((r) =>
-      this.withComputed(r, withdrawn.get(r.id) ?? 0, initialFor(r.rootInvestmentId ?? r.id)),
+      this.withComputed(
+        r,
+        withdrawn.get(r.id) ?? 0,
+        initialFor(r.rootInvestmentId ?? r.id),
+        settled.get(r.id) ?? 0,
+      ),
     );
   }
 
@@ -275,6 +306,10 @@ export class InvestmentsService {
       );
     }
 
+    if (type === WithdrawalType.PROFIT_SETTLEMENT || type === WithdrawalType.PARTIAL_SETTLEMENT) {
+      throw new BadRequestException('Use settle-profit or settle-partial to record a settlement');
+    }
+
     if (type === WithdrawalType.WITHDRAWAL) {
       const principal = num(investment.investmentAmount);
       if (dto.amount > principal + 0.01) {
@@ -282,6 +317,7 @@ export class InvestmentsService {
           `Withdrawal amount exceeds current investment of ${principal.toFixed(2)}`,
         );
       }
+      await this.assertWithinOutstanding(investment, dto.amount);
       // A zero balance does NOT settle the investment — settlement is
       // only ever triggered explicitly via PFS (see settleProfit below).
       // Profit stays intact and available while ACTIVE even at ₹0
@@ -334,6 +370,10 @@ export class InvestmentsService {
     const profitBase = principal + (await this.withdrawnTotal(investment.id));
     const profitAmount = (profitBase * num(investment.profitPercent)) / 100;
     const fullSettlement = investment.investorType?.settlementMode === SettlementMode.FULL_SETTLEMENT;
+    // Anything already paid out via partial settlements comes off the
+    // amount this final settlement pays.
+    const alreadySettled = await this.partiallySettledTotal(investment.id);
+    const settleable = fullSettlement ? principal + profitAmount : profitAmount;
 
     investment.status = InvestmentStatus.SETTLED;
     await this.repo.save(investment);
@@ -343,7 +383,7 @@ export class InvestmentsService {
         investmentId: investment.id,
         type: WithdrawalType.PROFIT_SETTLEMENT,
         installment: investment.installment,
-        amount: fullSettlement ? principal + profitAmount : profitAmount,
+        amount: Math.max(0, settleable - alreadySettled),
         date: investment.endDate,
         notes: fullSettlement
           ? 'Principal and profit fully settled; investment closed'
@@ -375,6 +415,62 @@ export class InvestmentsService {
     });
     const saved = await this.repo.save(nextInstallment);
     return this.findOneWithComputed(saved.id);
+  }
+
+  private async partiallySettledTotal(investmentId: number): Promise<number> {
+    const rows = await this.withdrawalsRepo.find({
+      where: { investmentId, type: WithdrawalType.PARTIAL_SETTLEMENT },
+    });
+    return rows.reduce((sum, w) => sum + num(w.amount), 0);
+  }
+
+  // A withdrawal draws down principal without touching profit, so for
+  // FULL_SETTLEMENT it also draws down the outstanding amount — it must
+  // not push that below zero once partial settlements have paid part of
+  // it out already. ROLLOVER's outstanding amount is profit only, which
+  // a withdrawal never touches.
+  private async assertWithinOutstanding(investment: Investment, withdrawalAmount: number) {
+    if (investment.investorType?.settlementMode !== SettlementMode.FULL_SETTLEMENT) return;
+    if (!(await this.partiallySettledTotal(investment.id))) return;
+    const { outstandingAmount } = await this.findOneWithComputed(investment.id);
+    if (withdrawalAmount > outstandingAmount + 0.01) {
+      throw new BadRequestException(
+        `Withdrawal amount exceeds the outstanding amount of ${outstandingAmount.toFixed(2)}`,
+      );
+    }
+  }
+
+  // Settle Other Amount: pays out part of the outstanding amount (see
+  // withComputed) and leaves the installment ACTIVE — principal and
+  // profit are untouched, only the outstanding amount comes down. A
+  // payment covering the whole outstanding amount is just Settle Entire
+  // Amount (PFS), so it's routed there to close out the installment.
+  async settlePartial(investmentId: number, dto: CreatePartialSettlementDto) {
+    const investment = await this.findOne(investmentId);
+    if (investment.status === InvestmentStatus.SETTLED) {
+      throw new BadRequestException('This investment is already settled');
+    }
+    const { outstandingAmount } = await this.findOneWithComputed(investment.id);
+    if (dto.amount > outstandingAmount + 0.01) {
+      throw new BadRequestException(
+        `Settlement amount exceeds the outstanding amount of ${outstandingAmount.toFixed(2)}`,
+      );
+    }
+    if (dto.amount >= outstandingAmount - 0.01) {
+      return this.settleProfit(investment.id);
+    }
+
+    await this.withdrawalsRepo.save(
+      this.withdrawalsRepo.create({
+        investmentId: investment.id,
+        type: WithdrawalType.PARTIAL_SETTLEMENT,
+        installment: investment.installment,
+        amount: dto.amount,
+        date: dto.date || this.today(),
+        notes: dto.notes || 'Partial settlement',
+      }),
+    );
+    return this.findOneWithComputed(investment.id);
   }
 
   // principal per entry is a running balance, not a stored snapshot: we
@@ -428,6 +524,9 @@ export class InvestmentsService {
     if (withdrawal.type === WithdrawalType.PROFIT_SETTLEMENT) {
       throw new BadRequestException('Profit settlements cannot be edited');
     }
+    if (withdrawal.type === WithdrawalType.PARTIAL_SETTLEMENT) {
+      throw new BadRequestException('Partial settlements cannot be edited');
+    }
 
     if (dto.amount != null && dto.amount !== num(withdrawal.amount)) {
       const principalBeforeThis =
@@ -441,6 +540,7 @@ export class InvestmentsService {
             `Withdrawal amount exceeds current investment of ${principalBeforeThis.toFixed(2)}`,
           );
         }
+        await this.assertWithinOutstanding(investment, dto.amount - num(withdrawal.amount));
         principal = Math.max(0, principalBeforeThis - dto.amount);
       } else {
         principal = principalBeforeThis + dto.amount;
